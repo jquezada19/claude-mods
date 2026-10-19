@@ -1,0 +1,45 @@
+<!doctype html>
+<html data-theme="github-dark">
+<head>
+<meta charset="utf-8" />
+<title>repo-diffs harness</title>
+<style>
+  :root { --fs: 14px; --line-px: 21; --line: calc(var(--fs) * 1.5); --mono: ui-monospace, 'SF Mono', Menlo, monospace; --cell: 8.4px; }
+  [data-theme='dark'] { --bg: #1a1a19; --fg: #e8e6e1; --chip: #3a3a37; --border: #333; --link: #6ea8fe; }
+  [data-theme='github-dark'] { --bg: #0d1117; --fg: #f0f6fc; --chip: #3d444d; --border: #3d444d; --link: #4493f8; }
+  [data-theme='light'] { --bg: #faf9f5; --fg: #1f1e1c; --chip: #e3e1d9; --border: #ccc; --link: #2563eb; }
+  body { margin: 0; font: 13px -apple-system, system-ui, sans-serif; background: #0d0d0c; color: #ddd; }
+  #bar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 6px 8px; background: #000; }
+  #bar button { font-size: 11px; }
+  #pane { width: 900px; resize: horizontal; overflow: auto; height: calc(100vh - 60px); background: var(--bg); color: var(--fg); border: 1px solid var(--border); margin: 8px; }
+  #pane .title { padding: 8px 12px; font-weight: 500; border-bottom: 1px solid var(--border); }
+  #body { font-size: var(--fs); line-height: var(--line); font-family: -apple-system, system-ui, 'Inter', sans-serif; overflow-x: hidden; }
+  .btn { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; display: inline-flex; align-items: center; gap: 0.35em; white-space: pre; min-width: 0; flex-shrink: 1; }
+  .btn .lbl { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .btn.primary { background: #b5532f; color: white; padding: 0 0.6em; border-radius: 5px; }
+  .btn.secondary { border: 1px solid var(--border); padding: 0 0.6em; border-radius: 5px; }
+  kbd { font: 11px var(--mono); border: 1px solid var(--chip); border-radius: 4px; padding: 0 4px; line-height: 1.4; opacity: 0.8; }
+  .link { color: var(--link); overflow-wrap: anywhere; min-width: 0; }
+  .input { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .input input { flex: 1; min-width: 6em; font: inherit; background: transparent; color: inherit; border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
+  pre.code { margin: 0; font: var(--fs) / 1.5 var(--mono); }
+  pre.code.cut div { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  pre.code.wrap div { white-space: pre-wrap; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<div id="bar">
+  <select id="scenario"></select>
+  <input id="w" type="range" min="200" max="2600" value="900" />
+  <span id="cols"></span>
+  <button data-w="240">240</button><button data-w="320">320</button><button data-w="420">420</button><button data-w="560">560</button>
+  <button data-w="720">720</button><button data-w="760">760</button><button data-w="900">900</button><button data-w="1100">1100</button>
+  <button data-w="1440">1440</button><button data-w="1920">1920</button><button data-w="2560">2560</button>
+  <button onclick="setTheme(document.documentElement.dataset.theme==='dark'?'light':'dark')">theme</button><button onclick="setTheme('github-dark')">github dark</button>
+  <button onclick="setTrunc('observed')">truncate-start: observed</button><button onclick="setTrunc('ideal')">ideal</button>
+  <button onclick="setFont(11)">11px</button><button onclick="setFont(14)">14px</button><button onclick="setFont(18)">18px</button>
+</div>
+<div id="pane"><div class="title">Repo diffs</div><div id="body"></div></div>
+<script src="bundle.js"></script>
+</body>
+</html>

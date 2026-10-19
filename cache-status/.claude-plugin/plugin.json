@@ -1,0 +1,20 @@
+{
+  "name": "cache-status",
+  "version": "0.7.0",
+  "description": "Band row showing whether the prompt cache is warm or cold, time left, cold restarts this session, and an opt-in guard before sending into a lapsed cache",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "coldSendGuard": {
+      "type": "boolean",
+      "title": "Cold-send guard",
+      "description": "Ask before a prompt is sent into a lapsed cache when the context is big (Send / Compact now / Cancel)",
+      "default": false
+    },
+    "bigTokens": {
+      "type": "number",
+      "title": "Big context (tokens)",
+      "description": "Context size in tokens above which the cold-send guard asks",
+      "default": 150000
+    }
+  }
+}

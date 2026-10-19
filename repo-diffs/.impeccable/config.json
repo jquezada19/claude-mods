@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "harness/shots/dom-*.html"
+        ],
+        "createdAt": "2026-10-15T04:09:48.314Z",
+        "reason": "Claude Code pane drawn on a character-cell grid: a vertical inset costs one whole text row, so rows and bands sit flush top/bottom by design; right-edge flush cases were fixed in the pane (paddingRight on diff rows)"
+      },
+      {
+        "rule": "monotonous-spacing",
+        "value": "*",
+        "files": [
+          "harness/shots/dom-*.html"
+        ],
+        "createdAt": "2026-10-15T04:09:48.336Z",
+        "reason": "cell grid: spacing is whole cells or rows, so 0 dominates by construction"
+      }
+    ]
+  }
+}

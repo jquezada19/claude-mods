@@ -1,0 +1,13 @@
+{
+  "name": "usage-hp",
+  "owner": {
+    "name": "claude-mods"
+  },
+  "description": "usage-hp: a video-game health bar above the Claude Code prompt for each usage limit, with an Enterprise spend estimate priced per model",
+  "plugins": [
+    {
+      "name": "usage-hp",
+      "source": "./"
+    }
+  ]
+}

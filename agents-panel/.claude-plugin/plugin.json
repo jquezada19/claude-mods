@@ -1,0 +1,14 @@
+{
+  "name": "agents-panel",
+  "version": "0.5.0",
+  "description": "Band row and Agents pane showing every subagent of the session: type, model, context fill, tokens, elapsed and status",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "autoOpen": {
+      "type": "boolean",
+      "title": "Open the Agents pane on the first agent",
+      "description": "Once per session, the pane opens itself when the first subagent, Bash-launched agent or Codex run starts; off, /agents-panel and the band's ×n button open it",
+      "default": true
+    }
+  }
+}

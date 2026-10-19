@@ -1,0 +1,6 @@
+{
+  "name": "repo-diffs",
+  "version": "0.4.0",
+  "description": "Pane showing branch diffs for the repos/worktrees this session touches, outside the session cwd",
+  "types": "./types/index.d.ts"
+}

@@ -1,0 +1,20 @@
+{
+  "name": "ticket-phase",
+  "version": "0.4.0",
+  "description": "Band row showing the workflow phase this session is in, elapsed against your own median, an own-pace ETA, tokens this phase and review rounds",
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "sink": {
+      "type": "string",
+      "title": "Phase sink",
+      "description": "The JSONL file your workflow script appends phase rows to",
+      "default": "~/.claude/metrics/ticket-phase-tokens.jsonl"
+    },
+    "vault": {
+      "type": "string",
+      "title": "Vault root",
+      "description": "The Obsidian vault whose Work Items notes carry tier:",
+      "default": "~/Documents/Obsidian Vault"
+    }
+  }
+}
