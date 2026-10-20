@@ -39,7 +39,7 @@ List this mod first in `CLAUDE_CODE_PLUGIN_DIRS` to draw it under the other rows
 
 `/phase` prints every phase with its enters, exits, rounds, median and sample counts, the ETA basis, the token tally and the skipped-row count. `/phase hide` / `/phase show` turn the row off and on; tracking continues while hidden.
 
-The mod reads the sink (default `~/.claude/metrics/ticket-phase-tokens.jsonl`) and the vault's `Work Items/` notes (`In Flight`, `In Testing`, `Backlog`, the root, then every folder under `Done/`, first match wins); it writes nothing but its own `$.store` keys. Paths are `userConfig` (`sink`, `vault`; `~` expands to your home). It re-reads when a Bash call whose command contains `ticket-phase.sh` lands, at each finished turn, and once a minute when the sink's or the note's mtime moved (or a ticket with no note gains one). Medians pair each exit with its own session's enter first, so interleaved sessions measure their own stretches.
+The mod reads the sink (default `~/.claude/metrics/ticket-phase-tokens.jsonl`) and the notes folder's `Work Items/` notes (`In Flight`, `In Testing`, `Backlog`, the root, then every folder under `Done/`, first match wins); it writes nothing but its own `$.store` keys. Paths are `userConfig` (`sink`, `vault`; `~` expands to your home). It re-reads when a Bash call whose command contains `ticket-phase.sh` lands, at each finished turn, and once a minute when the sink's or the note's mtime moved (or a ticket with no note gains one). Medians pair each exit with its own session's enter first, so interleaved sessions measure their own stretches.
 
 Tests: `claude plugin test .` (91 cases) and `python3 tests/mutate.py` (63 mutants, each must be detected).
 
@@ -61,7 +61,7 @@ A line that is not JSON, or misses or mistypes any of the five, is skipped and c
 
     {"ts":"2026-01-05T14:03:00Z","session":"0b7c2d5e-1f4a-4c1e-9a7d-3e2b6f8a9c10","ticket":"12345","phase":5,"event":"enter"}
 
-**Notes vault (optional).** The tier label comes from a markdown note named `<ticket> - <title>.md` (e.g. `12345 - Dark mode toggle.md`) under `<vault>/Work Items/`, searched in `In Flight/`, `In Testing/`, `Backlog/`, `Work Items/` itself, then each folder under `Done/` (first match wins). The note's YAML frontmatter needs a `tier:` field with a single alphabetic word (`tier: full`, read case-insensitively); without a note, or without the field, the tier shows `?`. `userConfig.vault` sets the vault root.
+**Notes folder (optional).** The tier label comes from a markdown note named `<ticket> - <title>.md` (e.g. `12345 - Dark mode toggle.md`) under `<vault>/Work Items/`, searched in `In Flight/`, `In Testing/`, `Backlog/`, `Work Items/` itself, then each folder under `Done/` (first match wins). The note's YAML frontmatter needs a `tier:` field with a single alphabetic word (`tier: full`, read case-insensitively); without a note, or without the field, the tier shows `?`. `userConfig.vault` sets the notes folder (default `~/Documents/Obsidian Vault`, Obsidian's own first-run vault path; any folder with the same layout works).
 
 ## 0.3.0 (2026-10-16)
 

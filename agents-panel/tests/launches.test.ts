@@ -2,8 +2,8 @@ import { expect, test } from 'claude-code/testing'
 
 import { CODEX_DEFAULT_MS, doneStatus, parseLaunches, parseNotifications, wrapperTimeoutMs } from '../hooks/launches'
 
-const RUN = '~/.claude/skills/buddy-panel/scripts/buddy-run.sh'
-const RELAY = 'node ~/.claude/skills/buddy-task/scripts/relay.mjs'
+const RUN = '~/bin/buddy-run.sh'
+const RELAY = 'node ~/bin/relay.mjs'
 const ENV = { HOME: '/Users/x' }
 
 test('launches: buddy-run names the model, its meta file and its timeout', async () => {
@@ -42,7 +42,7 @@ test('launches: Codex runs by companion verb or codex exec; a mention of codex i
     { type: 'codex:review', model: 'codex', doneFile: null, timeoutMs: CODEX_DEFAULT_MS },
   ])
   expect(parseLaunches('codex exec --cd /r "explain" </dev/null', ENV)[0]!.type).toBe('codex:exec')
-  expect(parseLaunches('grep -rn codex ~/.claude/skills; echo codex', ENV)).toEqual([])
+  expect(parseLaunches('grep -rn codex ~/bin; echo codex', ENV)).toEqual([])
   expect(parseLaunches('git status', ENV)).toEqual([])
 })
 

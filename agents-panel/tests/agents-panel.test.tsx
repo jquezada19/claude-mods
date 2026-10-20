@@ -908,7 +908,7 @@ const shell = (on: On) => {
 const bash = ($: Kit, command: string, over: Record<string, unknown> = {}) =>
   $.tool.call({ tool: 'Bash', tool_use_id: 'tu-bash', command, description: 'ask the panel', ...over } as never)
 
-const RUN = '~/.claude/skills/buddy-panel/scripts/buddy-run.sh'
+const RUN = '~/bin/buddy-run.sh'
 
 const notify = ($: Kit, toolUseId: string, status = 'completed') =>
   $.prompt.submit({
