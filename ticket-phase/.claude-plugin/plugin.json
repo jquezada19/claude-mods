@@ -12,8 +12,8 @@
     },
     "vault": {
       "type": "string",
-      "title": "Vault root",
-      "description": "The Obsidian vault whose Work Items notes carry tier:",
+      "title": "Notes folder",
+      "description": "The notes folder (an Obsidian vault, for instance) whose Work Items/ notes carry tier:",
       "default": "~/Documents/Obsidian Vault"
     }
   }

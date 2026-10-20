@@ -650,7 +650,7 @@ test('a Bash call to ticket-phase.sh refreshes in the same turn', OPTIONS, async
   await $.session.start({ cwd: '/t' } as never)
   expect(await drawn($)).toContain('5 Implement')
   it.sink([line('s1', '1002', 5, 'enter', T0), line('s1', '1002', 5, 'exit', T0 + MINUTE), line('s1', '1002', 6, 'enter', T0 + MINUTE)])
-  await $.tool.call({ tool: 'Bash', command: '~/.claude/scripts/ticket-phase.sh 1002 6 enter --session s1' } as never)
+  await $.tool.call({ tool: 'Bash', command: '~/bin/ticket-phase.sh 1002 6 enter --session s1' } as never)
   expect(await drawn($)).toContain('6 Review')
   await $.tool.call({ tool: 'Bash', command: 'ls' } as never)
   expect(it.bash.length).toBe(2)

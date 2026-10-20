@@ -4,3 +4,5 @@ repo-diffs/harness/shots/
 repo-diffs/harness/stress.json
 repo-diffs/harness/bundle*.js
 repo-diffs/harness/gen/
+__pycache__/
+*.pyc

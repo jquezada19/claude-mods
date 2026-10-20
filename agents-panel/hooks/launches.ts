@@ -1,5 +1,5 @@
 /**
- * Agents that run outside the engine, started by a Bash call: a Cursor buddy seat
+ * Agents that run outside the engine, started by a Bash call: an external-model seat
  * (buddy-run.sh, relay.mjs) or a Codex run (codex-companion.mjs, `codex exec`).
  * The engine never lists them, so their rows open on the call and close on its
  * result, or, for a backgrounded call, on its task notification or when the
