@@ -61,7 +61,7 @@ A line that is not JSON, or misses or mistypes any of the five, is skipped and c
 
     {"ts":"2026-01-05T14:03:00Z","session":"0b7c2d5e-1f4a-4c1e-9a7d-3e2b6f8a9c10","ticket":"12345","phase":5,"event":"enter"}
 
-**Notes folder (optional).** The tier label comes from a markdown note named `<ticket> - <title>.md` (e.g. `12345 - Dark mode toggle.md`) under `<vault>/Work Items/`, searched in `In Flight/`, `In Testing/`, `Backlog/`, `Work Items/` itself, then each folder under `Done/` (first match wins). The note's YAML frontmatter needs a `tier:` field with a single alphabetic word (`tier: full`, read case-insensitively); without a note, or without the field, the tier shows `?`. `userConfig.vault` sets the notes folder (default `~/Documents/Obsidian Vault`, Obsidian's own first-run vault path; any folder with the same layout works).
+**Notes folder (optional).** The tier label comes from a markdown note named `<ticket> - <title>.md` (e.g. `12345 - Dark mode toggle.md`) under `<vault>/Work Items/`, searched in `In Flight/`, `In Testing/`, `Backlog/`, `Work Items/` itself, then each folder under `Done/` (first match wins). The note's YAML frontmatter needs a `tier:` field with a single alphabetic word (`tier: full`, read case-insensitively); without a note, or without the field, the tier shows `?`. `userConfig.vault` (the key is `vault` for historical reasons) sets the notes folder (default `~/Documents/Obsidian Vault`, Obsidian's own first-run vault path; any folder with the same layout works).
 
 ## 0.3.0 (2026-10-16)
 
