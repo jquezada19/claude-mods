@@ -4,11 +4,12 @@
  * legs, on a 22 x 16 cell grid (one <rect> per cell, 1.5 units a cell).
  * Groups: `bd` body + costume, `ey` the eyes, `la`/`lb` the two leg pairs,
  * `sp` the sparkles, and a named group per prop. The motion is pure CSS so a
- * redraw never moves a pixel. `codex`, `panda`, `gemini`, `grok` and `composer`
- * are not Clawds: the Codex bot, the Kimi panda, the Gemini droplet, the Grok ball
- * and the Composer cube, each drawn on its own finer grid inside the same box.
+ * redraw never moves a pixel. `codex`, `panda`, `gemini`, `grok`, `composer` and
+ * `deepseek` are not Clawds: the Codex bot, the Kimi panda, the Gemini droplet, the
+ * Grok ball, the Composer cube and the DeepSeek whale, each drawn on its own finer
+ * grid inside the same box.
  */
-export type Costume = 'plain' | 'pirate' | 'detective' | 'engineer' | 'chef' | 'codex' | 'panda' | 'gemini' | 'grok' | 'composer'
+export type Costume = 'plain' | 'pirate' | 'detective' | 'engineer' | 'chef' | 'codex' | 'panda' | 'gemini' | 'grok' | 'composer' | 'deepseek'
 
 export const CLAWD_W = 26
 export const CLAWD_SCALE = 1.1
@@ -32,10 +33,11 @@ export const ACCENT: Record<Costume, string> = {
   gemini: '#4C8DF6',
   grok: '#8A8A8E',
   composer: '#A0A0A6',
+  deepseek: '#4D6BFE',
 }
 
 /** Units a cell, where a costume draws on a grid other than the Clawd's. */
-const UNITS: Partial<Record<Costume, number>> = { codex: 1, panda: 1, gemini: 1, grok: 1, composer: 1 }
+const UNITS: Partial<Record<Costume, number>> = { codex: 1, panda: 1, gemini: 1, grok: 1, composer: 1, deepseek: 1 }
 
 /** `tone` classes the rect itself, so the theme CSS can recolor it. */
 type Fill = (x: number, y: number, w: number, h: number, color: string, cls?: string, tone?: string) => void
@@ -255,10 +257,41 @@ const COMPOSER = [
   '....KKKKKKK..KKKKKKK....',
 ]
 
+// The DeepSeek whale from its pixel sprite: a blue whale curled to the left, a white
+// belly crescent with a pectoral fin across it, a white eye (`E`, which blinks), a
+// white gap between its back and its raised fluke, and a darker rim (`D`) on its
+// underside. The fluke (`T`) flicks and the whale rocks while it runs; no feet.
+const DEEPSEEK = [
+  '........................',
+  '........................',
+  '........................',
+  '.........BB..TT.........',
+  '.....BBBBBB..TTT....TTT.',
+  '...BBBBBBBBB..TTT..TTTT.',
+  '..BDBBBBBBBB..TTTTTTTTT.',
+  '.BDBBBBBBBBBB..BBBBBBB..',
+  '.BDBBBBBBBBBBB..BBBBB...',
+  '.BBBBBBBBBBBBBB.BBBBB...',
+  'BBB....BBBBBBBBBBBBBB...',
+  'BB......BBBBBEEBBBBB....',
+  'BB.......BBBBEEEBBBB....',
+  'BB........BBBBBBBBB.....',
+  'DBB.......BBBBBBBB......',
+  'DBB...BB...BBBBBB.......',
+  '.DBB...BB...BBBBB.......',
+  '.DBBB...BB...BBBBB......',
+  '..DBBBBBBBB...BBBBBB....',
+  '...DDBBBBBBBB..DBBBBB...',
+  '.....DDDBBBBBBDD........',
+  '........DDDDD...........',
+  '........................',
+  '........................',
+]
+
 /**
  * A 24-row sprite at one unit a cell, one <rect> per run of a color so the larger
  * grid stays small, centred where a Clawd's body sits (a 20-wide one five units in). `U` cells go to
- * the blinking cursor group, `E` to the blinking eyes; rows 22-23 are the feet, the
+ * the blinking cursor group, `E` to the blinking eyes, `T` to the flicking tail; rows 22-23 are the feet, the
  * left stepping with `la`, the right with `lb`, unless the sprite has none.
  */
 const gridSprite = (
@@ -281,7 +314,7 @@ const gridSprite = (
       }
 
       if (ch !== '.') {
-        f(left + x, y, end - x, 1, color[ch]!, ch === 'U' ? 'cu' : ch === 'E' ? 'ey' : hasFeet && y >= 22 ? (x < width / 2 ? 'la' : 'lb') : 'bd', tones[ch])
+        f(left + x, y, end - x, 1, color[ch]!, ch === 'U' ? 'cu' : ch === 'E' ? 'ey' : ch === 'T' ? 'tl' : hasFeet && y >= 22 ? (x < width / 2 ? 'la' : 'lb') : 'bd', tones[ch])
       }
 
       x = end
@@ -382,13 +415,15 @@ const COSTUMES: Record<Costume, (f: Fill, accent: string, body: string) => void>
       X: '#4E4E4E',
       b: '#B5B5B5',
     }),
+  deepseek: (f, _accent, body) =>
+    gridSprite(f, DEEPSEEK, { B: body === CLAY ? '#1F4DF5' : body, T: body === CLAY ? '#1F4DF5' : body, D: '#1538C8', E: '#FFFFFF' }, {}, false),
 }
 
 /**
  * Pure CSS motion, run by the compositor; in dark mode the panda gets a one-cell
  * slate black, since its black limbs and ears would vanish into the background;
  * the Grok ball turns white with black eyes; the Gemini droplet's rainbow bands
- * cycle while it runs. Every costume walks (legs step out of
+ * cycle while it runs; the DeepSeek whale rocks and flicks its fluke. Every costume walks (legs step out of
  * phase, the body bobs), blinks every few seconds, and the plain one's sparkles
  * twinkle; each prop adds its own motion. Reduced motion stops all of it.
  */
@@ -412,6 +447,8 @@ export const CLAWD_CSS = `<style>
 @keyframes ctilt{20%,40%{transform:rotate(-12deg)}}@keyframes cflip{30%{transform:translateY(-6px) scaleY(-1)}60%{transform:translateY(0)}}
 .c-codex.run .cu{animation:ccursor 1s steps(1) infinite}
 @keyframes ccursor{50%{opacity:0}}
+.c-deepseek.run .bd{transform-box:fill-box;transform-origin:50% 60%;animation:cswim 1.2s ease-in-out infinite}.c-deepseek.run .tl{transform-box:fill-box;transform-origin:20% 100%;animation:cflick .6s ease-in-out infinite}
+@keyframes cswim{0%,100%{transform:rotate(-4deg) translateY(0)}50%{transform:rotate(4deg) translateY(1.5px)}}@keyframes cflick{50%{transform:rotate(-14deg)}}
 @media (prefers-color-scheme: dark){.c-panda .pk{fill:#6B7584}.c-grok .kb,.c-grok .kh{fill:#F8F8F6}.c-grok .ke{fill:#0B0B0B}}
 .c-gemini.run rect[class^="g"]{animation:crainbow 1.4s step-end infinite}.c-gemini .g1{animation-delay:-.2s}.c-gemini .g2{animation-delay:-.4s}.c-gemini .g3{animation-delay:-.6s}.c-gemini .g4{animation-delay:-.8s}.c-gemini .g5{animation-delay:-1s}.c-gemini .g6{animation-delay:-1.2s}
 @keyframes crainbow{0%{fill:#FF3B30}14.29%{fill:#FF9500}28.57%{fill:#FFD60A}42.86%{fill:#34C759}57.14%{fill:#00C7E6}71.43%{fill:#1E6FFF}85.71%{fill:#C03BF5}100%{fill:#FF3B30}}

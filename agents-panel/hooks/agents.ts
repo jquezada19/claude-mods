@@ -351,7 +351,8 @@ export const CLAWDS: readonly Costume[] = ['plain', 'pirate', 'detective', 'engi
 /**
  * The costume for an agent type, any `<plugin>:` prefix removed: every agent of the
  * codex plugin is the Codex bot, a Kimi buddy seat (`buddy:kimi-…`) the panda, a
- * Gemini one the rainbow droplet, a Grok one the ball, a Composer one the cube. Any
+ * Gemini one the rainbow droplet, a Grok one the ball, a Composer one the cube, a
+ * DeepSeek one the whale. Any
  * other subagent takes the Clawd costume its spawn order (`variant`) points at, so a
  * session's agents show every one; with no variant it is the plain Clawd.
  */
@@ -363,6 +364,7 @@ export const costumeOf = (type: string, variant?: number): Costume => {
   if (type.startsWith('buddy:') && bare.startsWith('gemini')) return 'gemini'
   if (type.startsWith('buddy:') && /^(cursor-)?grok/.test(bare)) return 'grok'
   if (type.startsWith('buddy:') && bare.startsWith('composer')) return 'composer'
+  if (type.startsWith('buddy:') && bare.startsWith('deepseek')) return 'deepseek'
 
   if (bare === 'Explore') return 'pirate'
   if (bare === 'Plan') return 'engineer'

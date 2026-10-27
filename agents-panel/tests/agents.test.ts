@@ -216,6 +216,7 @@ test('costumeOf strips a plugin prefix and maps the known types', async () => {
   expect(costumeOf('buddy:grok-4.7-high')).toBe('grok')
   expect(costumeOf('buddy:cursor-grok-4.6-fast')).toBe('grok')
   expect(costumeOf('buddy:composer-2')).toBe('composer')
+  expect(costumeOf('buddy:deepseek-v41-flash-1017-high')).toBe('deepseek')
   expect(costumeOf('buddy:cursor')).toBe('plain')
   expect(costumeOf('buddy:gemini-3.8-flash-high')).toBe('gemini')
   expect(costumeOf('gemini-something')).toBe('plain')

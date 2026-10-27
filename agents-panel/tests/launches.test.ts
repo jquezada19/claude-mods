@@ -26,9 +26,9 @@ test('launches: the dir resolves from assignments earlier in the command, env an
   expect(parseLaunches(`${RUN} kimi-k3-high "$(mktemp -d)"`, ENV)[0]!.doneFile).toBeNull()
 })
 
-test('launches: relay takes --model, else its kimi default, else cursor under a lane config; --out-dir names result.json', async () => {
+test('launches: relay takes --model, else its grok default, else cursor under a lane config; --out-dir names result.json', async () => {
   expect(parseLaunches(`${RELAY} --workspace /w --brief-file /w/b.md`, ENV)).toEqual([
-    { type: 'buddy:kimi-k3-high', model: 'kimi-k3-high', doneFile: null, timeoutMs: 1_800_000 },
+    { type: 'buddy:grok-4.7-high', model: 'grok-4.7-high', doneFile: null, timeoutMs: 1_800_000 },
   ])
   expect(parseLaunches(`${RELAY} --workspace /w --model grok-4.7-high --out-dir /o --timeout 60000`, ENV)).toEqual([
     { type: 'buddy:grok-4.7-high', model: 'grok-4.7-high', doneFile: '/o/result.json', timeoutMs: 60_000 },

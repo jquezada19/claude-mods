@@ -23,6 +23,8 @@
 @keyframes ctilt{20%,40%{transform:rotate(-12deg)}}@keyframes cflip{30%{transform:translateY(-6px) scaleY(-1)}60%{transform:translateY(0)}}
 .c-codex.run .cu{animation:ccursor 1s steps(1) infinite}
 @keyframes ccursor{50%{opacity:0}}
+.c-deepseek.run .bd{transform-box:fill-box;transform-origin:50% 60%;animation:cswim 1.2s ease-in-out infinite}.c-deepseek.run .tl{transform-box:fill-box;transform-origin:20% 100%;animation:cflick .6s ease-in-out infinite}
+@keyframes cswim{0%,100%{transform:rotate(-4deg) translateY(0)}50%{transform:rotate(4deg) translateY(1.5px)}}@keyframes cflick{50%{transform:rotate(-14deg)}}
 .c-panda .pk{fill:#6B7584}.c-grok .kb,.c-grok .kh{fill:#F8F8F6}.c-grok .ke{fill:#0B0B0B}
 .c-gemini.run rect[class^="g"]{animation:crainbow 1.4s step-end infinite}.c-gemini .g1{animation-delay:-.2s}.c-gemini .g2{animation-delay:-.4s}.c-gemini .g3{animation-delay:-.6s}.c-gemini .g4{animation-delay:-.8s}.c-gemini .g5{animation-delay:-1s}.c-gemini .g6{animation-delay:-1.2s}
 @keyframes crainbow{0%{fill:#FF3B30}14.29%{fill:#FF9500}28.57%{fill:#FFD60A}42.86%{fill:#34C759}57.14%{fill:#00C7E6}71.43%{fill:#1E6FFF}85.71%{fill:#C03BF5}100%{fill:#FF3B30}}

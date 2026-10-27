@@ -98,6 +98,7 @@ const COSTUMES: [Costume, string][] = [
   ['gemini', 'Gemini'],
   ['grok', 'Grok'],
   ['composer', 'Composer'],
+  ['deepseek', 'DeepSeek'],
 ]
 const CELL = 64
 write(
@@ -113,7 +114,7 @@ write(
     '</svg>',
 )
 // The labels above say which agent types wear which costume; keep them true.
-for (const [type, want] of [['Explore', 'pirate'], ['Plan', 'engineer'], ['claude-code-guide', 'chef'], ['codex:codex-rescue', 'codex'], ['buddy:kimi-k3', 'panda'], ['buddy:gemini-3', 'gemini'], ['buddy:grok-5', 'grok'], ['buddy:composer-2', 'composer']] as const) {
+for (const [type, want] of [['Explore', 'pirate'], ['Plan', 'engineer'], ['claude-code-guide', 'chef'], ['codex:codex-rescue', 'codex'], ['buddy:kimi-k3', 'panda'], ['buddy:gemini-3', 'gemini'], ['buddy:grok-5', 'grok'], ['buddy:composer-2', 'composer'], ['buddy:deepseek-v4', 'deepseek']] as const) {
   if (costumeOf(type) !== want) throw new Error(`costumeOf(${type}) is ${costumeOf(type)}, not ${want}: fix the costume labels`)
 }
 

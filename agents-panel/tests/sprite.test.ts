@@ -2,7 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import { ACCENT, CLAWD_CSS, CLAWD_W, clawd } from '../hooks/sprite'
 
-const COSTUMES = ['plain', 'pirate', 'detective', 'engineer', 'chef', 'codex', 'panda', 'gemini', 'grok', 'composer'] as const
+const COSTUMES = ['plain', 'pirate', 'detective', 'engineer', 'chef', 'codex', 'panda', 'gemini', 'grok', 'composer', 'deepseek'] as const
 
 for (const costume of COSTUMES) {
   test(`sprite: ${costume} is well-formed, has both leg groups, and only walks when asked`, async () => {
@@ -90,4 +90,16 @@ test('sprite: composer is the cube, 24 wide and centred three units in, its boot
   // Boots split at the middle column: the left boot's sole in la, the right one's in lb.
   expect(still).toMatch(/<g class="la"><rect x="7" y="22"[^]*<\/g><g class="lb"><rect x="16" y="22"/)
   expect(clawd(0, 0, 'composer', { tint: '#5fbf8f' })).toContain('fill="#5fbf8f"')
+})
+
+test('sprite: deepseek is the whale, its fluke flicking and the body rocking only while it runs', async () => {
+  const still = clawd(0, 0, 'deepseek')
+  // The fluke's top cells sit in the tail group, three units in.
+  expect(still).toMatch(/<g class="tl"><rect x="16" y="3" width="2" height="1" fill="#1F4DF5"\/>/)
+  expect(still).toMatch(/<g class="ey"><rect[^>]*fill="#FFFFFF"/)
+  expect(still).toContain('fill="#1538C8"')
+  expect(still).toContain('<g class="la"></g><g class="lb"></g>')
+  expect(CLAWD_CSS).toContain('.c-deepseek.run .tl{')
+  expect(CLAWD_CSS).toContain('.c-deepseek.run .bd{')
+  expect(clawd(0, 0, 'deepseek', { tint: '#5fbf8f' })).toContain('fill="#5fbf8f"')
 })

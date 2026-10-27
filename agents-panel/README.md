@@ -35,13 +35,13 @@ The pane, open and collapsed:
 
 Every costume, by the agent type that wears it:
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/costumes-dark.svg"><img alt="The ten sprites: plain, pirate (Explore), detective, engineer (Plan), chef (claude-code-guide), the Codex bot, the Kimi panda, the Gemini droplet, the Grok ball and the Composer cube" src="docs/costumes.svg"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/costumes-dark.svg"><img alt="The eleven sprites: plain, pirate (Explore), detective, engineer (Plan), chef (claude-code-guide), the Codex bot, the Kimi panda, the Gemini droplet, the Grok ball, the Composer cube and the DeepSeek whale" src="docs/costumes.svg"></picture>
 
 ## What a card says
 
 | Part | Meaning |
 |---|---|
-| Clawd costume | the agent's type: Explore is a pirate, Plan an engineer, claude-code-guide a chef; every other subagent takes the costume its spawn number points at, counting every subagent of the session including those three (plain, pirate, detective, engineer, chef, then round again), so a session shows them all; any Codex agent or run (a `codex:` type or `codex-rescue`, `/codex:review`, `codex exec`) is not a Clawd but the blue Codex bot, whose screen cursor blinks while it runs; a Bash-launched Kimi run (`buddy:kimi…`) is a panda, a Gemini one a rainbow droplet whose colors sweep while it runs, a Grok one (or `cursor-grok`) a ball (black on light, white on dark), a Composer one a grey cube with a raised fist; each walks while its agent runs. Sprites are desktop only: a terminal card has a coloured status mark, the description, a dim `type · model · effort` line, then a bar and the stats |
+| Clawd costume | the agent's type: Explore is a pirate, Plan an engineer, claude-code-guide a chef; every other subagent takes the costume its spawn number points at, counting every subagent of the session including those three (plain, pirate, detective, engineer, chef, then round again), so a session shows them all; any Codex agent or run (a `codex:` type or `codex-rescue`, `/codex:review`, `codex exec`) is not a Clawd but the blue Codex bot, whose screen cursor blinks while it runs; a Bash-launched Kimi run (`buddy:kimi…`) is a panda, a Gemini one a rainbow droplet whose colors sweep while it runs, a Grok one (or `cursor-grok`) a ball (black on light, white on dark), a Composer one a grey cube with a raised fist, a DeepSeek one a blue whale that rocks and flicks its fluke; each walks while its agent runs. Sprites are desktop only: a terminal card has a coloured status mark, the description, a dim `type · model · effort` line, then a bar and the stats |
 | `ctx 41% · 82k` | the agent's context after its latest request: input plus cache read plus cache write. The percent is against the session model's window and shows only when the agent runs that model; another model's window is not guessed |
 | `196k` | every request's four token counts, summed |
 | `0:19` | elapsed since the spawn, to the end for a finished agent; `h:mm:ss` past an hour |

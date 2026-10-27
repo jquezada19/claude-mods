@@ -20,7 +20,7 @@ export type Launch = {
 export const LAUNCH_GRACE_MS = 60_000
 const RUN_DEFAULT_S = 300
 const RELAY_DEFAULT_MS = 1_800_000
-const RELAY_DEFAULT_MODEL = 'kimi-k3-high'
+const RELAY_DEFAULT_MODEL = 'grok-4.7-high'
 /**
  * A Codex run names no timeout of its own; without a wrapper's, its row is lost
  * past this rather than running forever when its notification never comes.
