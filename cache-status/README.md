@@ -44,6 +44,19 @@ dialog sends as typed. The row hides while a survey shows.
 
 It stacks with other mods that draw in the same band (such as usage-hp) in `CLAUDE_CODE_PLUGIN_DIRS` order: on Claude Code 2.1.323 and later the first mod listed draws at the top.
 
+Optional **expiry heads-up** (`expiryNotice`, default off): when you have left a
+session whose cache is warm, a notification about a minute before it expires,
+so you can send something and keep it. It is booked when a turn of the main
+conversation ends and the session waits for you; the desktop or mobile app holds
+it and throws it away if you come back first. Any new turn, a compaction, a model
+switch or the session ending takes it back, and the next turn's end books it
+again. Only when the cache lifetime is known (from a cache write, the engine or
+your settings), never when it is only assumed, and never where a terminal is
+attached, since a terminal would show a delayed notification at once.
+
+Under a subagent's transcript the row says `main session`: the cache it counts
+is the main conversation's, not the subagent's.
+
 ## Install
 
 Requires a Claude Code version with mods: the docs say v2.1.287 or later; seen working in the desktop app on 2.1.284 and 2.1.286.
@@ -73,3 +86,9 @@ Requires a Claude Code version with mods: the docs say v2.1.287 or later; seen w
 
 - **An offer, never a switch.** With the cold-send guard off, the first lapse in a conversation whose context is at least `bigTokens` shows one toast saying what it re-cached and that the guard can be turned on in `/config` under cache-status. Once per conversation; `/clear` and `/resume` start over. The guard is never turned on for you, and a failure in the offer never stops the lapse being counted.
 
+## 0.8.0 (2026-11-23)
+
+- **Expiry heads-up** (`expiryNotice`, default off): a notification about a minute before a warm cache expires, booked when a main turn ends, held by the desktop or mobile app and dropped if you come back first; any new turn, compaction, model switch or session end takes it back. Only for a known lifetime, never where a terminal is attached.
+- **Whose cache.** Under a subagent's transcript the row reads `main session`.
+- The row's words cut at the band's edge instead of wrapping beside a docked pane.
+- The 1h/5m split of a cache write is read where Claude Code 2.1.330 reports it; the row stacks with other mods the way 2.1.323+ stacks band rows.

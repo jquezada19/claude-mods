@@ -1,6 +1,6 @@
 {
   "name": "agents-panel",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "Band row and Agents pane showing every subagent of the session: type, model, context fill, tokens, cost, elapsed and status; the engine's own agent rows get context fill and cost too",
   "types": "./types/index.d.ts",
   "userConfig": {

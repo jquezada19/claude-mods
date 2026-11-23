@@ -177,7 +177,71 @@ const afterCompaction = async ($: EngineInterface, tokensAfter: number | undefin
   }
 }
 
+/** The key the expiry heads-up is booked under: booked again it replaces the last, a prompt takes it back. */
+const EXPIRY_KEY = 'cache-expiry'
+/** How long before the cache expires the heads-up fires. */
+const EXPIRY_LEAD = MINUTE
+/** Nearer than this to its moment, no heads-up is booked: it would land as the cache goes. */
+const EXPIRY_MIN_DELAY = 10_000
+
+/**
+ * Every booking and cancel of the heads-up runs one at a time, in order: a cancel sent
+ * before its booking is out takes back nothing, and a late cancel would take back the
+ * next booking under the same key.
+ */
+let noticeChain: Promise<void> = Promise.resolve()
+
+const noticeOp = (fn: () => Promise<void>): Promise<void> => {
+  const run = noticeChain.then(fn)
+  noticeChain = run.catch(() => undefined)
+
+  return run
+}
+
+/** Takes back a booked heads-up; a host that holds none says so, and nothing else happens. */
+const cancelExpiry = async ($: EngineInterface): Promise<void> => {
+  await $.ui.cancelNotify(EXPIRY_KEY)
+}
+
+/**
+ * Brings the heads-up in line with the cache as last read, when a main turn has ended:
+ * booked a minute before it expires (held by the desktop or mobile app, thrown away if
+ * the person comes back first), or taken back when there is nothing to warn of: the last
+ * request used no cache, too little time is left, the lifetime is not known (a guessed
+ * 1h could be 5m, and the warning would come long after the cache went), or a terminal
+ * is attached (a terminal raises a delayed notification at once). Every other change
+ * (a turn starting, a compaction, a model switch, the session ending) only takes it
+ * back; the next turn's end books it again.
+ */
+const syncExpiry = async ($: EngineInterface, seen: CacheStatusLast | null | undefined): Promise<void> => {
+  const surfaces = await $.session.surfaces()
+  const delayMs = seen === null || seen === undefined ? 0 : seen.ttlMs - EXPIRY_LEAD - ((await $.clock.now()) - seen.at)
+  const isBookable =
+    seen !== null &&
+    seen !== undefined &&
+    seen.isCached &&
+    seen.ttlBasis !== undefined &&
+    seen.ttlBasis !== 'assumed' &&
+    surfaces.length > 0 &&
+    !surfaces.includes('terminal') &&
+    delayMs >= EXPIRY_MIN_DELAY
+
+  if (!isBookable) {
+    await cancelExpiry($)
+
+    return
+  }
+
+  await $.ui.notify(`The prompt cache (${seen.ttlMs === LONG_TTL ? '1h' : '5m'}) expires in about a minute. Send a message to keep it warm.`, {
+    title: 'Cache expiring',
+    key: EXPIRY_KEY,
+    delayMs,
+    untilBack: true,
+  })
+}
+
 export const register: Register = (on, options) => {
+  const isNoticeOn = options.expiryNotice === true
   const isGuardOn = options.coldSendGuard === true
   const bigTokens =
     typeof options.bigTokens === 'number' && options.bigTokens > 0 ? options.bigTokens : 150_000
@@ -185,6 +249,11 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     // The countdown moves with the clock, not with any state write.
     $.clock.every(TICK, () => $.ui.invalidate('ui.render'))
+
+    // Turned off (a reload runs this again): a heads-up the earlier setting booked is taken back.
+    if (!isNoticeOn) {
+      void noticeOp(() => cancelExpiry($)).catch(() => undefined)
+    }
 
     return next(e)
   })
@@ -194,6 +263,9 @@ export const register: Register = (on, options) => {
   // session goes on.
   on('prompt.submit', async ($, e, next) => {
     const kind = e.origin.kind
+
+    // The person is back: a heads-up booked for their absence is taken back (the next
+    // reply books a new one).
 
     // A slash command is not a prompt into the cache: /compact, /clear and the mods' own
     // commands pass, and a skill command pays its own way like any send.
@@ -308,10 +380,52 @@ export const register: Register = (on, options) => {
       await $.state.set(ENGINE, { ttlMs: reported, model: e.to_model })
     }
 
+    // A switch of the main model forfeits its warm cache: nothing left to warn of.
+    if (isNoticeOn && e.agent_id === undefined) {
+      void noticeOp(() => cancelExpiry($)).catch(() => undefined)
+    }
+
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // Any main turn starting (the person, a task notification, the SDK, a command that runs
+  // the model) takes the heads-up back: while a turn runs there is nothing to warn of.
+  on('turn.start', async ($, e, next) => {
+    if (isNoticeOn && e.agentId === undefined) {
+      void noticeOp(() => cancelExpiry($)).catch(() => undefined)
+    }
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The heads-up is booked when the main conversation's turn ends and it waits for the
+  // person, from the last request's reading: never mid-turn, while a tool or subagent
+  // still runs and a message could not keep the cache warm.
+  on('turn.complete', async ($, e, next) => {
+    const done = await next(e)
+
+    if (isNoticeOn && e.agentId === undefined) {
+      try {
+        const { value: seen } = await $.state.get(LAST)
+        await noticeOp(() => syncExpiry($, seen))
+      } catch {
+        // no heads-up this time; the row still counts down
+      }
+    }
+
+    return done
+  })
+
   on('session.end', async ($, e, next) => {
+    // Awaited: a session that is closing may not run what is left behind.
+    if (isNoticeOn) {
+      try {
+        await noticeOp(() => cancelExpiry($))
+      } catch {
+        // nothing booked, or nobody to tell
+      }
+    }
+
     // /resume and /branch end this conversation too (reported as resume); no session.start follows.
     if (e.reason === 'clear' || e.reason === 'resume') {
       await $.state.set(LAST, null)
@@ -333,6 +447,10 @@ export const register: Register = (on, options) => {
     }
 
     await afterCompaction($, done.tokensAfter)
+
+    if (isNoticeOn) {
+      void noticeOp(() => cancelExpiry($)).catch(() => undefined)
+    }
 
     return done
   }).catch(($, e, next) => next(e))
@@ -470,7 +588,9 @@ export const register: Register = (on, options) => {
     const { value: seen } = await $.state.get(LAST)
 
     if (seen === null || seen === undefined) {
-      return <Text dimColor>○ cache · waiting for first response</Text>
+      return (
+        <Text dimColor wrap="truncate-end">{`○ cache${e.props.view?.agentId === undefined ? '' : ' · main session'} · waiting for first response`}</Text>
+      )
     }
 
     const left = seen.ttlMs - ((await $.clock.now()) - seen.at)
@@ -494,12 +614,15 @@ export const register: Register = (on, options) => {
             misses > 0 ? ` · ${misses} miss${misses === 1 ? '' : 'es'}` : ''
           } · ${tokens(reCached)} re-cached`
 
+    // Under a subagent's transcript the row is still the main conversation's cache.
+    const whose = e.props.view?.agentId === undefined ? '' : ' · main session'
+
     return (
       <Box>
-        <Text color={isCold ? 'red' : left < CLOSE ? 'yellow' : 'green'} bold>
+        <Text color={isCold ? 'red' : left < CLOSE ? 'yellow' : 'green'} bold wrap="truncate-end">
           {isCold ? '○ CACHE COLD' : '● CACHE WARM'}
         </Text>
-        <Text dimColor>{`${detail}${tally}`}</Text>
+        <Text dimColor wrap="truncate-end">{`${whose}${detail}${tally}`}</Text>
       </Box>
     )
   })

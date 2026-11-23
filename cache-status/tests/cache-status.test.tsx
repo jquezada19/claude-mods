@@ -2,6 +2,9 @@ import { expect, mock, test } from 'claude-code/testing'
 import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
+// The test host runs the module under a real timer, but the mod's lib (no DOM, no Node) declares none.
+declare const setTimeout: (callback: () => void, ms: number) => unknown
+
 const T0 = Date.UTC(2026, 9, 7, 12, 0, 0)
 const MINUTE = 60_000
 const SURFACES = ['terminal', 'desktop'] as const
@@ -116,12 +119,12 @@ const world = (on: On, now = T0, setup: Setup = {}) => {
 
 type Kit = Engine
 
-const drawn = async ($: Kit, surface: (typeof SURFACES)[number] = 'desktop') => {
+const drawn = async ($: Kit, surface: (typeof SURFACES)[number] = 'desktop', extra: Record<string, unknown> = {}) => {
   const ui = await $.ui.mount({
     plugin: 'cache-status',
     surface,
     component: 'AbovePrompt',
-    props: { hasSurvey: false, isWorking: false },
+    props: { hasSurvey: false, isWorking: false, ...extra },
   } as never)
   const found = await (
     ui as never as { findAll: (q: { type: 'Text' }) => Promise<{ text?: string }[]> }
@@ -702,4 +705,204 @@ test('the cache row draws beside another plugin\'s row: the band stacks rows its
     expect(text).toContain('cache')
     expect(text).toContain('♥ SPEND')
   }
+})
+
+
+/** The notification calls the mod makes, answered as a host that holds them would. */
+const notices = (on: On, surfaces: string[]) => {
+  const n = { booked: [] as { text: string; options: Record<string, unknown> }[], cancelled: [] as string[] }
+  on('session.surfaces', () => ({ value: surfaces }) as never)
+  on('turn.start', (_, e) => ({ turnId: e.turnId }) as never)
+  on('session.start', () => ({ cwd: '/t' }) as never)
+  on('ui.notify', (_, e) => {
+    const { text, ...options } = e as { text: string } & Record<string, unknown>
+    n.booked.push({ text, options })
+
+    return { value: { isSent: true } } as never
+  })
+  on('ui.cancelNotify', (_, e) => {
+    n.cancelled.push((e as { key: string }).key)
+
+    return { value: { isSent: true } } as never
+  })
+
+  return n
+}
+
+const NOTICE = { options: { expiryNotice: true } }
+
+/** The main conversation's turn ends: where the heads-up is booked. */
+const turnEnd = ($: Kit) =>
+  $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't1', reason: 'answer' } as never)
+
+test('expiry heads-up: a warm cache books one a minute before it expires, held until the person is away', NOTICE, async ($, on) => {
+  const n = notices(on, ['desktop'])
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, warm(120_000))
+  // Mid-turn, nothing is booked: a tool or subagent may still be running.
+  expect(n.booked.length).toBe(0)
+  await turnEnd($)
+  expect(n.booked.length).toBe(1)
+  expect(n.booked[0]!.options).toMatchObject({ key: 'cache-expiry', untilBack: true, delayMs: 59 * 60_000 })
+  expect(n.booked[0]!.text).toContain('about a minute')
+  // A subagent's turn starting changes nothing; a main turn starting, however it was
+  // started, takes the heads-up back.
+  await $.turn.start({ text: '', turnId: 't2', agentId: 'sub-1' } as never)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  expect(n.cancelled).toEqual([])
+  await $.turn.start({ text: '', turnId: 't3' } as never)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  expect(n.cancelled).toEqual(['cache-expiry'])
+})
+
+test('expiry heads-up: never where a terminal is attached', NOTICE, async ($, on) => {
+  const n = notices(on, ['terminal', 'desktop'])
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, warm(120_000))
+  await turnEnd($)
+  expect(n.booked.length).toBe(0)
+})
+
+test('expiry heads-up: a response that used no cache books nothing', NOTICE, async ($, on) => {
+  const n = notices(on, ['desktop'])
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, { input_tokens: 5_000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' })
+  await turnEnd($)
+  expect(n.booked.length).toBe(0)
+})
+
+test('expiry heads-up: off by default', async ($, on) => {
+  const n = notices(on, ['desktop'])
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, warm(120_000))
+  await turnEnd($)
+  expect(n.booked.length).toBe(0)
+})
+
+test('under a subagent transcript the row says it is the main session cache', async ($, on) => {
+  const it = world(on)
+  await step($, it, warm(120_000))
+  expect(await drawn($, 'terminal', { view: { agentId: 'a1' } })).toContain('main session')
+  expect(await drawn($, 'terminal', { view: {} })).not.toContain('main session')
+})
+
+
+test('expiry heads-up: an assumed lifetime books nothing (a guessed 1h could be 5m)', NOTICE, async ($, on) => {
+  const n = notices(on, ['desktop'])
+  const it = world(on)
+  await step($, it, warm(120_000))
+  await turnEnd($)
+  expect(n.booked.length).toBe(0)
+})
+
+test('expiry heads-up: a later request that used no cache takes the booked one back', NOTICE, async ($, on) => {
+  const n = notices(on, ['desktop'])
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, warm(120_000))
+  await turnEnd($)
+  expect(n.booked.length).toBe(1)
+  await step($, it, { input_tokens: 5_000, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: 'claude-opus-5-5' }, 1)
+  await turnEnd($)
+  expect(n.cancelled).toEqual(['cache-expiry'])
+})
+
+test('expiry heads-up: a switch of the main model takes it back', NOTICE, async ($, on) => {
+  const n = notices(on, ['desktop'])
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, warm(120_000))
+  await turnEnd($)
+  await $.classic.PostModelSwitch({ hook_event_name: 'PostModelSwitch', from_model: 'claude-opus-5-5', to_model: 'claude-sonnet-5-5', cache_ttl: '1h' } as never)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  expect(n.cancelled).toEqual(['cache-expiry'])
+})
+
+test('expiry heads-up: a cancel waits for a booking still in flight, so it takes that booking back', NOTICE, async ($, on) => {
+  const log: string[] = []
+  let release: () => void = () => undefined
+  on('session.surfaces', () => ({ value: ['desktop'] }) as never)
+  on('ui.notify', async () => {
+    log.push('book:start')
+    await new Promise<void>(resolve => {
+      release = resolve
+    })
+    log.push('book:done')
+
+    return { value: { isSent: true } } as never
+  })
+  on('ui.cancelNotify', () => {
+    log.push('cancel')
+
+    return { value: { isSent: true } } as never
+  })
+  on('turn.start', (_, e) => ({ turnId: e.turnId }) as never)
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, warm(120_000))
+  const stepping = turnEnd($)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  // A new turn starts while the booking is still on its way out.
+  const submitting = $.turn.start({ text: 'hi', turnId: 't2' } as never)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  release()
+  await Promise.all([stepping, submitting])
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  expect(log).toEqual(['book:start', 'book:done', 'cancel'])
+})
+
+test('under a subagent transcript the waiting row says main session too', async ($, on) => {
+  world(on)
+  expect(await drawn($, 'terminal', { view: { agentId: 'a1' } })).toContain('main session')
+})
+
+
+test('expiry heads-up: the session ending takes it back', NOTICE, async ($, on) => {
+  const n = notices(on, ['desktop'])
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, warm(120_000))
+  await turnEnd($)
+  await $.session.end({ reason: 'other', sessionId: 's1' } as never)
+  expect(n.cancelled).toEqual(['cache-expiry'])
+})
+
+
+test('expiry heads-up: a compaction takes it back and books nothing until the next turn ends', NOTICE, async ($, on) => {
+  const n = notices(on, ['desktop'])
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, warm(120_000))
+  await turnEnd($)
+  expect(n.booked.length).toBe(1)
+  await $.session.compact({ trigger: 'manual', messages: [{ role: 'user', text: 'long', toolUses: [] }] } as never)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  expect(n.cancelled).toEqual(['cache-expiry'])
+  expect(n.booked.length).toBe(1)
+})
+
+test('expiry heads-up: a reading with no lifetime basis books nothing', NOTICE, async ($, on) => {
+  const n = notices(on, ['desktop'])
+  world(on)
+  // A reading left by an older version: cached, with no basis for its lifetime.
+  on('state.get', (_, e, next) =>
+    (e as { key: string }).key === 'last'
+      ? ({ value: { value: { at: T0, hitPercent: 90, ttlMs: 60 * 60_000, isCached: true, promptTokens: 100_000, model: 'claude-opus-5-5' }, version: 1 } } as never)
+      : next(e),
+  )
+  await turnEnd($)
+  expect(n.booked.length).toBe(0)
+})
+
+test('expiry heads-up: off, a session start takes back one an earlier setting booked', async ($, on) => {
+  const n = notices(on, ['desktop'])
+  world(on)
+  await $.session.start({ cwd: '/t' } as never)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  expect(n.cancelled).toEqual(['cache-expiry'])
+})
+
+test('expiry heads-up: a subagent finishing books nothing; only the main turn ending does', NOTICE, async ($, on) => {
+  const n = notices(on, ['desktop'])
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, warm(120_000))
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'sub-t', reason: 'answer', agentId: 'sub-1' } as never)
+  expect(n.booked.length).toBe(0)
+  await turnEnd($)
+  expect(n.booked.length).toBe(1)
 })

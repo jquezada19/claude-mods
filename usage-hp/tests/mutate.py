@@ -10,6 +10,9 @@ import os, shutil, subprocess, sys, tempfile
 SRC = os.environ.get("USAGE_HP_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REGISTER = os.path.join("hooks", "register.tsx")
 MUTANTS = [
+    ("collapsed-draws-all", REGISTER, "      const { Text } = $.ui.resolve(e)\n\n      return <Text dimColor>♥ HP</Text>\n    }\n", "      return next(e)\n    }\n"),
+    ("narrow-ignored", REGISTER, "e.props.bodyColumns < NARROW_COLUMNS ? CELLS / 2 : CELLS", "false ? CELLS / 2 : CELLS"),
+    ("narrow-bar-full-gap", REGISTER, "<Text dimColor>{'░'.repeat(n - full - ghost)}</Text>", "<Text dimColor>{'░'.repeat(CELLS - full - ghost)}</Text>"),
     ("measure-ignored", REGISTER, "if (e.changed.includes('rateLimits')) {", "if (e.changed.includes('rateLimits') && e.changed.length < 0) {"),
     ("measure-on-anything", REGISTER, "if (e.changed.includes('rateLimits')) {", "if (e.changed.length > 0) {"),
     ("refresh-unqueued", REGISTER, "  inTurn($, () => refresh($, cause, isRead))", "  refresh($, cause, isRead)"),

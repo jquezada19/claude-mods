@@ -15,6 +15,8 @@ import type {
 } from '../types'
 
 const CELLS = 20
+/** Below this many band columns a terminal bar draws half its cells. */
+const NARROW_COLUMNS = 64
 const HEART =
   'M8 14.6 L1.7 8.3 A3.85 3.85 0 0 1 8 3.4 A3.85 3.85 0 0 1 14.3 8.3 Z'
 // The quadrants a heart keeps as it drains: top-right goes first, top-left last.
@@ -1432,6 +1434,22 @@ export const register: Register = on => {
       return next(e)
     }
 
+    // Collapsed, nothing of the row is on screen: a word in its place, and none of the
+    // store reads or drawing below.
+    if (e.props.isCollapsed) {
+      // Still nothing to show on a metered seat with no /hp limit and no window: pass.
+      const { value: collapsedReading } = await $.state.get(READING)
+      const { value: isMeteredSeat = false } = await $.state.get(METERED)
+
+      if (isMeteredSeat && (collapsedReading?.budget ?? null) === null && (collapsedReading?.windows ?? []).length === 0) {
+        return next(e)
+      }
+
+      const { Text } = $.ui.resolve(e)
+
+      return <Text dimColor>♥ HP</Text>
+    }
+
     const { value: isMetered = false } = await $.state.get(METERED)
 
     const { Box, Text } = $.ui.resolve(e)
@@ -1612,13 +1630,15 @@ export const register: Register = on => {
           </Box>
         )}
         {bars.map(bar => {
+          // A narrow terminal band (a docked pane beside it) halves the bar: a cell a tenth.
+          const n = e.surface !== 'desktop' && e.props.bodyColumns > 0 && e.props.bodyColumns < NARROW_COLUMNS ? CELLS / 2 : CELLS
           const left = Math.max(0, Math.min(100, bar.left))
           const used = 100 - left
           // The cells still lit: a twentieth each, and any health keeps one.
           // `used` lights the rest, so the two styles are exact complements
           // rather than each rounding its own half-cell up.
-          const lit = left === 0 ? 0 : Math.max(1, Math.round((left / 100) * CELLS))
-          let full = style === 'used' ? CELLS - lit : lit
+          const lit = left === 0 ? 0 : Math.max(1, Math.round((left / 100) * n))
+          let full = style === 'used' ? n - lit : lit
           let ghost = 0
           let percent = `${Math.round(style === 'used' ? used : left)}%`.padStart(4)
 
@@ -1628,8 +1648,8 @@ export const register: Register = on => {
           if (bar.range !== undefined) {
             const [worst, best] = bar.range.map(one => Math.max(0, Math.min(100, one))) as [number, number]
             const [from, to] = style === 'used' ? [100 - best, 100 - worst] : [worst, best]
-            full = Math.min(CELLS - 1, Math.floor((from / 100) * CELLS))
-            ghost = Math.max(1, Math.ceil((to / 100) * CELLS) - full)
+            full = Math.min(n - 1, Math.floor((from / 100) * n))
+            ghost = Math.max(1, Math.ceil((to / 100) * n) - full)
             const [lo, hi] = [Math.floor(from), Math.ceil(to)]
             percent = lo === hi ? `${lo}%` : `${lo}–${hi}%`
           }
@@ -1685,7 +1705,7 @@ export const register: Register = on => {
                   ) : (
                     <Box>
                       <Text color={color}>{'█'.repeat(full) + '▒'.repeat(ghost)}</Text>
-                      <Text dimColor>{'░'.repeat(CELLS - full - ghost)}</Text>
+                      <Text dimColor>{'░'.repeat(n - full - ghost)}</Text>
                     </Box>
                   )
                 ) : e.surface === 'desktop' ? (

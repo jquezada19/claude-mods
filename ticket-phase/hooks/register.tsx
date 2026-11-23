@@ -223,15 +223,18 @@ const refreshNow = async ($: EngineInterface, options: PluginOptions): Promise<v
     if (st.size > SINK_READ_CAP) {
       // Past what one read may copy (4 MiB): the newest part, from its first whole row.
       // One byte more than the window: when that byte is a newline the window opens on a
-      // whole row and keeps it; otherwise the first, cut row is dropped. Output the engine
-      // cut short (a sink growing during the read) is not taken as the history.
-      const r = await $.process.run(['tail', '-c', String(SINK_READ_CAP + 1), sink], { timeoutMs: 10_000 })
+      // whole row and keeps it; otherwise the first, cut row is dropped (a character the
+      // cut splits reads as U+FFFD, in that dropped row). A sink that grows during the read
+      // only moves the window back by what was added.
+      const window = await $.fs.read(sink, { offset: st.size - (SINK_READ_CAP + 1), length: SINK_READ_CAP + 1 })
 
-      if (r.exitCode !== 0 || r.isStdoutTruncated) {
-        throw new Error('tail failed')
+      // Nothing at the offset: the sink was replaced by a shorter one after the stat.
+      // Not an empty history: the next tick reads again.
+      if (window === '') {
+        throw new Error('sink changed under the read')
       }
 
-      text = r.stdout.slice(r.stdout.indexOf('\n') + 1)
+      text = window.slice(window.indexOf('\n') + 1)
       isPartial = true
     } else {
       text = await $.fs.read(sink)
@@ -507,6 +510,14 @@ export const register: Register = (on, options) => {
 
     if (e.props.hasSurvey || isHidden || reading === null || reading === undefined) {
       return next(e)
+    }
+
+    // Collapsed, nothing of the row is on screen: the ticket in its place, and no tally
+    // read or drawing.
+    if (e.props.isCollapsed) {
+      const { Text } = $.ui.resolve(e)
+
+      return <Text dimColor>{`#${reading.ticket}`}</Text>
     }
 
     const now = await $.clock.now()

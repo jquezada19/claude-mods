@@ -1033,6 +1033,11 @@ export const register: Register = (on, options) => {
     const at = Math.max(tickNow, ...running.map(a => a.startedAt))
     const text = bandText(running, at)
     const { Box, Text, Button } = $.ui.resolve(e)
+
+    // Collapsed, nothing of the row is on screen: its words, and no drawing.
+    if (e.props.isCollapsed) {
+      return <Text dimColor>{text}</Text>
+    }
     const button = <Button key="agents-open" label={`×${running.length}`} plain onPress={() => void togglePane($).catch(() => undefined)} />
 
     if (e.surface === 'desktop') {

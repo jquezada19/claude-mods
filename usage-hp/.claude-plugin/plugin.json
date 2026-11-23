@@ -1,6 +1,6 @@
 {
   "name": "usage-hp",
-  "version": "0.26.0",
+  "version": "0.27.0",
   "description": "A video-game health bar above the prompt showing how much usage is left",
   "types": "./types/index.d.ts"
 }

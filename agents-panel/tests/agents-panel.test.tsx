@@ -641,12 +641,12 @@ test('201 completed spawns keep 200; 201 running spawns keep 201', async ($, on)
   await it.clock.settle()
 })
 
-const band = async ($: Kit, surface: (typeof SURFACES)[number]) => {
+const band = async ($: Kit, surface: (typeof SURFACES)[number], extra: Record<string, unknown> = {}) => {
   const ui = await $.ui.mount({
     plugin: 'agents-panel',
     surface,
     component: 'AbovePrompt',
-    props: { hasSurvey: false, isWorking: false, bodyColumns: 120 },
+    props: { hasSurvey: false, isWorking: false, bodyColumns: 120, ...extra },
   } as never)
   const h = ui as never as {
     findAll: (q: { type: string }) => Promise<{ type: string; text?: string; props: Record<string, unknown> }[]>
@@ -1418,4 +1418,17 @@ test('agent.report: a run spawned again under an id /clear took away gets its ow
   await $.agent.report({ agentId: 'id-Plan', subagentType: 'Plan', provider: { plugin: 'engine', tier: 'core' }, status: 'stopped', text: '' } as never)
   const [a] = await rows(it)
   expect(a!.status).toBe('stopped')
+})
+
+
+test('collapsed, the band row is its words alone: no sprites, no button', async ($, on) => {
+  const it = world(on)
+  await $.session.start({ cwd: '/t' } as never)
+  await spawn($, 'Explore')
+  it.infos = [{ id: 'id-Explore', status: 'running' }]
+  const b = await band($, 'desktop', { isCollapsed: true })
+  expect(b.texts).toContain('1 running')
+  expect(b.svgs.length).toBe(0)
+  expect(b.buttons.length).toBe(0)
+  await b.done()
 })

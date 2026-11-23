@@ -1,6 +1,6 @@
 {
   "name": "cache-status",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Band row showing whether the prompt cache is warm or cold, time left, cold restarts this session, and an opt-in guard before sending into a lapsed cache",
   "types": "./types/index.d.ts",
   "userConfig": {
@@ -15,6 +15,12 @@
       "title": "Big context (tokens)",
       "description": "Context size in tokens above which the cold-send guard asks",
       "default": 150000
+    },
+    "expiryNotice": {
+      "type": "boolean",
+      "title": "Heads-up before the cache expires",
+      "description": "When you have left a session with a warm cache, a notification about a minute before it expires (desktop and mobile apps only; dropped if you come back first)",
+      "default": false
     }
   }
 }

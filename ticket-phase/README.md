@@ -73,3 +73,8 @@ A line that is not JSON, or misses or mistypes any of the five, is skipped and c
 - **Old tallies leave the store.** At session start, a tally untouched for 30 days is deleted. Activity counts, not phase age: a tally that took tokens recently stays however long ago its phase began.
 - **A ticket with no Work Item note is looked for at most every ten minutes**, on every path that looks (ticks, finished turns, the `ticket-phase.sh` Bash call), not every minute. A search is claimed before it walks the folders, so two refreshes at once walk them once.
 
+## 0.5.0 (2026-11-23)
+
+- **No subprocess for a big sink.** A sink past what one read may copy is read as one ranged read of its newest 3 MiB (Claude Code's `$.fs.read` with an offset), not through `tail`; the first, cut row is still dropped.
+- **Collapsed band, no work.** While the band is collapsed the row is the ticket number alone, with no tally read or drawing.
+- Refreshes run one at a time, and a cached note path from another notes folder is looked up again.

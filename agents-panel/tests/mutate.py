@@ -130,6 +130,7 @@ MUTANTS = [
     ("stale-report-applied", REGISTER, "    if (clearedIds.has(id)) {\n      return\n    }\n", ""),
     ("settle-again-off", REGISTER, "      if (settleAgain) {\n        settleSoon($)\n      }\n", ""),
     ("legacy-turns-same-run", AGENTS, "(a.turnId === undefined && a.turns === undefined)", "a.turnId === undefined"),
+    ("collapsed-draws-all", REGISTER, "    if (e.props.isCollapsed) {\n      return <Text dimColor>{text}</Text>\n    }\n", ""),
     ("composer-off", AGENTS, "  if (type.startsWith('buddy:') && bare.startsWith('composer')) return 'composer'\n", ""),
     ("grid-fixed-offset", SPRITE, "const left = Math.floor((30 - width) / 2)", "const left = 5"),
     ("grok-off", AGENTS, "  if (type.startsWith('buddy:') && /^(cursor-)?grok/.test(bare)) return 'grok'\n", ""),

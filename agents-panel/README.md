@@ -155,3 +155,7 @@ at another copy of the mod).
 - **Each agent's own figures.** The agent list (Claude Code 2.1.326 and later) gives every subagent's model, effort, context window and cost; the reconcile reads them onto the card. A subagent on another model than the session now gets a context percent against its own window, and every card shows its cost.
 - **Context and cost on the engine's rows.** Claude Code's own agent rows get `NN% ctx · $X.XX ·` in front of their words (`agentRows`, default on).
 - **Stopped is not failed.** A run the person stopped (the engine's report says `stopped`, or its agent list says `killed`) shows as stopped. A stopped run's completion, which reads as an error, does not turn it into failed; the report settles a card its completion marked, keeps its end time and never reopens it.
+
+## 0.6.1 (2026-11-23)
+
+- **Collapsed band, no drawing.** While the band is collapsed the row is its words alone: no sprites, no button.

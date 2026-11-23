@@ -384,3 +384,8 @@ Both are pruned when a session starts.
 - **A quiet band stops rescanning.** After two quiet minutes the SPEND row re-reads the other sessions' counts; that re-read (several full store scans) now runs at most once per two minutes instead of on every redraw, redraws that arrive while it reads share it, and it is redone at once when the entered figure changes or the month turns. `/hp off` in another session still clears the row on the next redraw.
 - `tests/mutate.py` (new): a clean baseline first, then one mutant per guard above.
 
+## 0.27.0 (2026-11-23)
+
+- **Collapsed band, no work.** While the band is collapsed the row is the word `♥ HP`: none of the store reads or drawing a full row costs.
+- **Narrow terminal bands** (under 64 columns, as beside a docked pane) draw the bar with ten cells, a tenth each, so the figures beside it stay on the row. The desktop drawing keeps its twenty.
+- Fable 5.2's prices; cache writes priced as 5-minute or 1-hour where the usage says which; no empty row on a metered seat with no `/hp` limit.

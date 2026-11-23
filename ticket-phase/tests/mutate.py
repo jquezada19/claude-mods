@@ -12,19 +12,20 @@ PHASES = os.path.join("hooks", "phases.ts")
 REGISTER = os.path.join("hooks", "register.tsx")
 ROW = os.path.join("hooks", "row.ts")
 # The suite's size at the time of writing; a mutant that fails everything is the module breaking.
-SUITE = 91
+SUITE = 94
 MUTANTS = [
+    ("refresh-unserialized", REGISTER, "  const run = refreshing.then(() => refreshNow($, options))", "  const run = refreshNow($, options)"),
+    ("rotated-sink-read-empty", REGISTER, "      if (window === '') {\n        throw new Error('sink changed under the read')\n      }\n", ""),
+    ("window-keeps-cut-row", REGISTER, "text = window.slice(window.indexOf('\\n') + 1)", "text = window"),
+    ("window-no-extra-byte", REGISTER, "offset: st.size - (SINK_READ_CAP + 1), length: SINK_READ_CAP + 1", "offset: st.size - SINK_READ_CAP, length: SINK_READ_CAP"),
+    ("collapsed-draws-all", REGISTER, "    if (e.props.isCollapsed) {\n      const { Text } = $.ui.resolve(e)\n\n      return <Text dimColor>{`#${reading.ticket}`}</Text>\n    }\n", ""),
     ("sink-cap-off", REGISTER, "if (st.size > SINK_READ_CAP) {", "if (st.size > SINK_READ_CAP * 1000) {"),
-    ("partial-line-kept", REGISTER, "text = r.stdout.slice(r.stdout.indexOf('\\n') + 1)", "text = r.stdout"),
     ("prune-off", REGISTER, 'if (isTally(value) && now - (value.at ?? value.enteredAt) > TALLY_KEEP_MS) {', 'if (isTally(value) && now - (value.at ?? value.enteredAt) > TALLY_KEEP_MS * 1000) {'),
     ("prune-everything", REGISTER, 'if (isTally(value) && now - (value.at ?? value.enteredAt) > TALLY_KEEP_MS) {', 'if (isTally(value) && now - (value.at ?? value.enteredAt) > -1) {'),
     ("note-search-every-lookup", REGISTER, '      if (noteSearched !== null && noteSearched.ticket === ticket && now - noteSearched.at < NOTE_SEARCH_MS) {', '      if (noteSearched !== null && now < 0) {'),
     ("prune-ignores-activity", REGISTER, 'if (isTally(value) && now - (value.at ?? value.enteredAt) > TALLY_KEEP_MS) {', 'if (isTally(value) && now - value.enteredAt > TALLY_KEEP_MS) {'),
-    ("tail-truncation-accepted", REGISTER, 'if (r.exitCode !== 0 || r.isStdoutTruncated) {', 'if (r.exitCode !== 0) {'),
-    ("tail-no-extra-byte", REGISTER, 'String(SINK_READ_CAP + 1)', 'String(SINK_READ_CAP)'),
     ("order-global", PHASES, '    const order = (ties.get(at) ?? 0) + 1\n    ties.set(at, order)', '    const order = rows.length + skipped + 1'),
     ("tally-activity-unstamped", REGISTER, '            at: await $.clock.now(),\n', ''),
-    ("search-claimed-late", REGISTER, '      const claim = { ticket, at: now }\n      noteSearched = claim\n      path = await findNote($, vault, ticket)\n', '      const claim = { ticket, at: now }\n      path = await findNote($, vault, ticket)\n      noteSearched = path === null ? claim : noteSearched\n'),
     ("band-shows-processed", REGISTER, "` · ${tokensShort(tally.fresh ?? 0)}`", "` · ${tokensShort(tally.tokens)}`"),
     ("fresh-counts-reads", REGISTER, "fresh: (tally.fresh ?? 0) + fresh,", "fresh: (tally.fresh ?? 0) + spent,"),
     ("median-to-mean", PHASES,

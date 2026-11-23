@@ -98,12 +98,12 @@ type Kit = Parameters<Extract<Parameters<typeof test>[1], (...args: never[]) => 
 /** `/hp <args>` as the person types it; the engine fills in where it came from. */
 const hp = (args: string) => ({ command: 'hp', args }) as never
 
-const drawn = async ($: Kit, surface: (typeof SURFACES)[number] = 'desktop') => {
+const drawn = async ($: Kit, surface: (typeof SURFACES)[number] = 'desktop', extra: Record<string, unknown> = {}) => {
   const ui = await $.ui.mount({
     plugin: 'usage-hp',
     surface,
     component: 'AbovePrompt',
-    props: { hasSurvey: false, isWorking: false },
+    props: { hasSurvey: false, isWorking: false, ...extra },
   } as never)
   const found = await (
     ui as never as { findAll: (q: { type: 'Text' }) => Promise<{ text?: string }[]> }
@@ -1599,4 +1599,41 @@ test('/hp in a session with limits of its own says which limit it shows', async 
   await $.turn.complete(TURN)
   const reply = (await $.command.run(hp('10 300'))) as { text: string }
   expect(reply.text).toContain('limits of its own')
+})
+
+
+test('collapsed, the row is a word: no bar, no figures', async ($, on) => {
+  world(on)
+  await $.command.run(hp('7.5 300'))
+  const text = await drawn($, 'terminal', { isCollapsed: true })
+  expect(text).toBe('♥ HP')
+})
+
+test('a narrow terminal band halves the bar: ten cells, a tenth each', async ($, on) => {
+  world(on)
+  await $.command.run(hp('150 300'))
+  const wide = await drawn($, 'terminal', { bodyColumns: 120 })
+  expect(wide.split('█').length - 1 + (wide.split('░').length - 1)).toBe(20)
+  const narrow = await drawn($, 'terminal', { bodyColumns: 50 })
+  expect(narrow.split('█').length - 1).toBe(5)
+  expect(narrow.split('░').length - 1).toBe(5)
+  // Desktop keeps its twenty-cell drawing whatever the width.
+  const ui = await $.ui.mount({
+    plugin: 'usage-hp',
+    surface: 'desktop',
+    component: 'AbovePrompt',
+    props: { hasSurvey: false, isWorking: false, bodyColumns: 50 },
+  } as never)
+  const svgs = await (ui as never as { findAll: (q: { type: 'Svg' }) => Promise<{ props: Record<string, unknown> }[]> }).findAll({ type: 'Svg' })
+  expect(svgs.some(one => String(one.props.alt ?? '').includes('of 20 cells lit'))).toBe(true)
+})
+
+test('collapsed on a metered seat with no limit entered, the row still passes: nothing to show', async ($, on) => {
+  const it = world(on)
+  steps(on)
+  on('env.get', (_, e) => ({ value: e.name === 'ANTHROPIC_API_KEY' ? 'set' : undefined }))
+  await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+  it.usd = 1
+  await $.turn.complete(TURN)
+  expect(await drawn($, 'terminal', { isCollapsed: true })).toBe('')
 })

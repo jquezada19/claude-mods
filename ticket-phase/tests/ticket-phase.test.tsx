@@ -11,6 +11,8 @@ const TICK = 60_000
 const SINK = '/t/sink.jsonl'
 const VAULT = '/t/vault'
 const OPTIONS = { options: { sink: SINK, vault: VAULT } }
+// The test host runs the module under a real timer, but the mod's lib (no DOM, no Node) declares none.
+declare const setTimeout: (callback: () => void, ms: number) => unknown
 const EMPTY = { type: 'Box', props: {}, children: [] } as never
 
 /** One sink line as ticket-phase.sh writes it, stamped from epoch ms. */
@@ -57,6 +59,12 @@ const world = (on: On, now = T0) => {
     usage: null as Usage | null,
     bash: [] as string[],
     reads: 0,
+    /** A ranged read (the newest part of a big sink) fails. */
+    rangeFails: false,
+    /** Awaited once by the next read, after its text was taken: holds that read open. */
+    readGate: null as null | (() => Promise<void>),
+    /** Called once, before the first ranged read is answered (to change the sink under it). */
+    beforeRangeRead: null as null | (() => void),
     lists: 0,
     afterRead: null as null | (() => void),
     statFails: new Set<string>(),
@@ -83,16 +91,41 @@ const world = (on: On, now = T0) => {
     return { value: undefined }
   })
   on('store.keys', () => ({ value: [...store.keys()] }))
-  on('fs.read', (_, e) => {
-    const f = files.get(e.path)
+  on('fs.read', async (_, e) => {
+    let f = files.get(e.path)
 
     if (f === undefined) {
       throw new Error(`ENOENT: ${e.path}`)
     }
 
     it.reads += 1
-    const text = f.text
+    const r = e as { offset?: number; length?: number }
+
+    if (r.offset !== undefined && it.rangeFails) {
+      throw new Error('range read failed')
+    }
+
+    if (r.offset !== undefined && it.beforeRangeRead !== null) {
+      const fn = it.beforeRangeRead
+      it.beforeRangeRead = null
+      fn()
+      f = files.get(e.path)!
+    }
+
+    // A range is in bytes, as the engine's is; a character it cuts reads as U+FFFD.
+    const bytes = new TextEncoder().encode(f.text)
+    const start = Math.max(0, r.offset ?? 0)
+    const end = r.length === undefined ? bytes.length : Math.min(bytes.length, start + r.length)
+    const text =
+      r.offset === undefined && r.length === undefined ? f.text : start >= bytes.length ? '' : new TextDecoder().decode(bytes.slice(start, end))
     it.afterRead?.()
+
+    // A gate a test holds a read at, after its text was taken (a slow read).
+    if (it.readGate !== null) {
+      const gate = it.readGate
+      it.readGate = null
+      await gate()
+    }
 
     return { value: text } as never
   })
@@ -114,7 +147,7 @@ const world = (on: On, now = T0) => {
     }
 
     return {
-      value: { kind: 'file', size: f.text.length, mtimeMs: f.mtimeMs, isLink: false },
+      value: { kind: 'file', size: new TextEncoder().encode(f.text).length, mtimeMs: f.mtimeMs, isLink: false },
     } as never
   })
   on('fs.list', (_, e) => {
@@ -176,12 +209,12 @@ type Kit = Parameters<NonNullable<Parameters<typeof test>[2]>>[0]
 const phase = ($: Kit, args: string) =>
   $.command.run({ command: 'phase', args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 80 } })
 
-const drawn = async ($: Kit, surface: 'desktop' | 'terminal' = 'terminal') => {
+const drawn = async ($: Kit, surface: 'desktop' | 'terminal' = 'terminal', extra: Record<string, unknown> = {}) => {
   const ui = await $.ui.mount({
     plugin: 'ticket-phase',
     surface,
     component: 'AbovePrompt',
-    props: { hasSurvey: false, isWorking: false, bodyColumns: 120 },
+    props: { hasSurvey: false, isWorking: false, bodyColumns: 120, ...extra },
   } as never)
   const h = ui as never as {
     findAll: (q: { type: string }) => Promise<{ text?: string; props: Record<string, unknown> }[]>
@@ -808,16 +841,14 @@ test('a ticket with no note is not looked for on every tick', OPTIONS, async ($,
 test('a sink past the read limit still gives a row, from its newest part', OPTIONS, async ($, on) => {
   const it = world(on)
   const tail = [line('s1', '1002', 5, 'enter', T0)].join('\n')
-  // An old row cut in half by the tail, then the rows that matter.
-  it.write(SINK, `${'{"old":"row"}\n'.repeat(260_000)}${tail}\n`)
-  on('process.run', (_, e) =>
-    ({
-      value:
-        e.argv[0] === 'tail'
-          ? { exitCode: 0, stdout: `ld":"row"}\n${tail}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
-          : { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
-    }) as never,
-  )
+  // Another session's rows past the window, one of them cut by its edge, then the rows
+  // that matter: read as one ranged read, no subprocess. Every row in the window is a
+  // good row, so a cut row counted would show as a skipped one.
+  const other = `${line('s9', '9999', 1, 'enter', T0 - MINUTE)}\n`
+  it.write(SINK, `${other.repeat(Math.ceil((3.2 * 1024 * 1024) / other.length))}${tail}\n`)
+  on('process.run', () => {
+    throw new Error('no subprocess should run')
+  })
   await $.session.start({ cwd: '/t' } as never)
   expect(await drawn($)).toContain('#1002')
   const report = (await $.command.run({ command: 'phase', args: '' } as never)) as { text: string }
@@ -838,30 +869,25 @@ test('a row keeps its order when rows before it drop out of the read window', OP
   expect(cut.map(r => r.order)).toEqual(whole.slice(1).map(r => r.order))
 })
 
-test('the tail keeps a first row that starts exactly at the cut', OPTIONS, async ($, on) => {
+test('the window keeps a first row that starts exactly at its edge', OPTIONS, async ($, on) => {
   const it = world(on)
-  it.write(SINK, `${'{"old":"row"}\n'.repeat(260_000)}${line('s1', '1002', 5, 'enter', T0)}\n`)
-  // The window opens exactly on a whole row: asked for one byte more, tail shows the
-  // newline before it; asked for exactly the window, the row comes first.
+  // The last 3 MiB are the row then one padded old row; the byte before them is a newline.
+  // One byte more than the window is read, so the window opens on that newline and the
+  // row that starts at the edge is kept.
+  const CAP = 3 * 1024 * 1024
   const row = `${line('s1', '1002', 5, 'enter', T0)}\n`
-  on('process.run', (_, e) =>
-    ({
-      value:
-        e.argv[0] === 'tail'
-          ? { exitCode: 0, stdout: Number(e.argv[2]) > 3 * 1024 * 1024 ? `\n${row}` : row, stderr: '', isStdoutTruncated: false, isStderrTruncated: false }
-          : { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
-    }) as never,
-  )
+  const padHead = '{"pad":"'
+  const pad = `${padHead}${'x'.repeat(CAP - row.length - padHead.length - 3)}"}\n`
+  it.write(SINK, `${'{"old":"row"}\n'.repeat(1000)}${row}${pad}`)
+  expect(row.length + pad.length).toBe(CAP)
   await $.session.start({ cwd: '/t' } as never)
   expect(await drawn($)).toContain('#1002')
 })
 
-test('a tail whose output was cut short is not taken as the history', OPTIONS, async ($, on) => {
+test('a window read that fails is no history: no row', OPTIONS, async ($, on) => {
   const it = world(on)
   it.write(SINK, `${'{"old":"row"}\n'.repeat(260_000)}${line('s1', '1002', 5, 'enter', T0)}\n`)
-  on('process.run', () =>
-    ({ value: { exitCode: 0, stdout: `x\n${line('s1', '1002', 5, 'enter', T0)}\n`, stderr: '', isStdoutTruncated: true, isStderrTruncated: false } }) as never,
-  )
+  it.rangeFails = true
   await $.session.start({ cwd: '/t' } as never)
   expect(await drawn($)).toBe('')
 })
@@ -1060,4 +1086,52 @@ test('desktop: a hidden row and a survey draw nothing; the terminal row is uncha
   expect(await drawn($, 'desktop')).toBe('')
   await phase($, 'show')
   expect(await drawn($, 'desktop')).not.toBe('')
+})
+
+
+test('collapsed, the row is the ticket alone: no tally read, no drawing', OPTIONS, async ($, on) => {
+  const it = world(on)
+  it.sink([line('s1', '1002', 5, 'enter', T0)])
+  await $.session.start({ cwd: '/t' } as never)
+  expect(await drawn($, 'terminal', { isCollapsed: true })).toBe('#1002')
+})
+
+
+test('a multi-byte character cut by the window edge is dropped with its row, not read as a bad row', OPTIONS, async ($, on) => {
+  const it = world(on)
+  // Rows of another session full of two-byte characters, so the 3 MiB edge splits one.
+  const other = `${line('s9', '9999', 1, 'enter', T0 - MINUTE).replace('9999', 'éééé9999')}\n`
+  it.write(SINK, `${other.repeat(Math.ceil((3.2 * 1024 * 1024) / other.length))}${line('s1', '1002', 5, 'enter', T0)}\n`)
+  await $.session.start({ cwd: '/t' } as never)
+  expect(await drawn($)).toContain('#1002')
+})
+
+test('a big sink replaced by a short one between the stat and the read is read again, not taken as empty', OPTIONS, async ($, on) => {
+  const it = world(on)
+  it.write(SINK, `${'{"old":"row"}\n'.repeat(260_000)}${line('s1', '1002', 5, 'enter', T0)}\n`)
+  it.beforeRangeRead = () => it.write(SINK, `${line('s1', '1002', 5, 'enter', T0)}\n`)
+  await $.session.start({ cwd: '/t' } as never)
+  // The empty window read is no history; the next tick reads the new, short sink.
+  await it.clock.advance(60_000)
+  expect(await drawn($)).toContain('#1002')
+})
+
+
+test('refreshes run one at a time: a slow older read never lands over a newer one', OPTIONS, async ($, on) => {
+  const it = world(on)
+  it.sink([line('s1', '1001', 5, 'enter', T0)], T0)
+  let release: () => void = () => undefined
+  it.readGate = () => new Promise<void>(resolve => {
+    release = resolve
+  })
+  // The first refresh takes the old sink and is held there.
+  const starting = $.session.start({ cwd: '/t' } as never)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  // The sink moves on, and the tick asks for a refresh while the first is still held.
+  it.sink([line('s1', '1002', 5, 'enter', T0 + 1)], T0 + 1)
+  await it.clock.advance(60_000)
+  release()
+  await starting
+  await new Promise<void>(resolve => setTimeout(resolve, 50))
+  expect(await drawn($)).toContain('#1002')
 })

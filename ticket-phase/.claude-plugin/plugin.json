@@ -1,6 +1,6 @@
 {
   "name": "ticket-phase",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "Band row showing the workflow phase this session is in, elapsed against your own median, an own-pace ETA, tokens this phase and review rounds",
   "types": "./types/index.d.ts",
   "userConfig": {
