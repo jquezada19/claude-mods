@@ -9,6 +9,12 @@ import os, shutil, subprocess, sys, tempfile
 # The mod's folder: the parent of tests/, unless MOD_DIR names another copy.
 SRC = os.environ.get("MOD_DIR") or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MUTANTS = [
+    ("no-countdown", "${isFinalStretch ? countdown(left) : span(left)} left of", "${span(left)} left of"),
+    ("final-tick-off", "      if (isFinalStretch || ticks % (TICK / SECOND) === 0) {", "      if (ticks % (TICK / SECOND) === 0) {"),
+    ("always-final-tick", "      if (isFinalStretch || ticks % (TICK / SECOND) === 0) {", "      if (true) {"),
+    ("final-on-cold", "    isFinalStretch = !isCold && left < FINAL", "    isFinalStretch = left < FINAL"),
+    ("final-boundary", "    isFinalStretch = !isCold && left < FINAL", "    isFinalStretch = !isCold && left <= FINAL"),
+    ("countdown-no-pad", "String(seconds % 60).padStart(2, '0')", "String(seconds % 60)"),
     ("turn-start-keeps-notice", "    if (isNoticeOn && e.agentId === undefined) {\n      void noticeOp(() => cancelExpiry($)).catch(() => undefined)\n    }\n\n    return next(e)", "    return next(e)"),
     ("subagent-turn-cancels", "    if (isNoticeOn && e.agentId === undefined) {\n      void noticeOp(() => cancelExpiry($)).catch(() => undefined)\n    }\n\n    return next(e)", "    if (isNoticeOn) {\n      void noticeOp(() => cancelExpiry($)).catch(() => undefined)\n    }\n\n    return next(e)"),
     ("compaction-keeps-notice", "    await afterCompaction($, done.tokensAfter)\n\n    if (isNoticeOn) {\n      void noticeOp(() => cancelExpiry($)).catch(() => undefined)\n    }\n", "    await afterCompaction($, done.tokensAfter)\n"),

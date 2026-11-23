@@ -5,6 +5,8 @@ session's prompt cache is warm or cold.
 
 - `● CACHE WARM` (green) with time left and the last request's cache-hit share
 - `● CACHE WARM` (yellow) under 5 minutes left
+- under 10 minutes left the time reads as a `m:ss` countdown that ticks every
+  second down to `0:00` (`· 9:59 left of 1h`); otherwise the row redraws every 15 s
 - `○ CACHE COLD · lapsed 12m ago · next message re-caches` (red) once the
   lifetime has lapsed
 - `○ CACHE COLD · expired while away · next message re-caches` after a resume
@@ -92,3 +94,7 @@ Requires a Claude Code version with mods: the docs say v2.1.287 or later; seen w
 - **Whose cache.** Under a subagent's transcript the row reads `main session`.
 - The row's words cut at the band's edge instead of wrapping beside a docked pane.
 - The 1h/5m split of a cache write is read where Claude Code 2.1.330 reports it; the row stacks with other mods the way 2.1.323+ stacks band rows.
+
+## 0.9.0 (2026-11-23)
+
+- **Final-stretch countdown.** Under 10 minutes left, the time reads `m:ss` and ticks every second down to `0:00`; a 5m cache counts down this way from the start. Above 10 minutes, and once the cache is cold, the row redraws every 15 s as before.

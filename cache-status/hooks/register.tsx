@@ -5,7 +5,11 @@ import type { CacheStatusLast, CacheStatusRestarts } from '../types'
 const MINUTE = 60_000
 const SHORT_TTL = 5 * MINUTE
 const LONG_TTL = 60 * MINUTE
+// The row redraws every TICK; in the final stretch, every second.
 const TICK = 15_000
+const SECOND = 1_000
+// Under this much left the time reads as a m:ss countdown to zero.
+const FINAL = 10 * MINUTE
 // Under this much left the band turns yellow: a prompt now still hits.
 const CLOSE = 5 * MINUTE
 // A request this big whose cache-written share passes this, after a gap past
@@ -91,6 +95,16 @@ const RESTARTS = { plugin: 'cache-status', key: 'restarts' } as const
 const ENGINE = { plugin: 'cache-status', key: 'engine' } as const
 /** Whether this conversation was already offered the cold-send guard. */
 const OFFERED = { plugin: 'cache-status', key: 'offered' } as const
+
+/** The time left as m:ss, for the final stretch: 9:59 down to 0:00. */
+const countdown = (ms: number): string => {
+  const seconds = Math.max(0, Math.floor(ms / SECOND))
+
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+}
+
+/** Whether the last drawing was warm inside FINAL: the tick then redraws every second. */
+let isFinalStretch = false
 
 const span = (ms: number): string => {
   const minutes = Math.floor(ms / MINUTE)
@@ -247,8 +261,16 @@ export const register: Register = (on, options) => {
     typeof options.bigTokens === 'number' && options.bigTokens > 0 ? options.bigTokens : 150_000
 
   on('session.start', async ($, e, next) => {
-    // The countdown moves with the clock, not with any state write.
-    $.clock.every(TICK, () => $.ui.invalidate('ui.render'))
+    // The countdown moves with the clock, not with any state write: every TICK, and
+    // every second once the last drawing was inside the final stretch.
+    let ticks = 0
+    $.clock.every(SECOND, () => {
+      ticks += 1
+
+      if (isFinalStretch || ticks % (TICK / SECOND) === 0) {
+        $.ui.invalidate('ui.render')
+      }
+    })
 
     // Turned off (a reload runs this again): a heads-up the earlier setting booked is taken back.
     if (!isNoticeOn) {
@@ -588,6 +610,8 @@ export const register: Register = (on, options) => {
     const { value: seen } = await $.state.get(LAST)
 
     if (seen === null || seen === undefined) {
+      isFinalStretch = false
+
       return (
         <Text dimColor wrap="truncate-end">{`○ cache${e.props.view?.agentId === undefined ? '' : ' · main session'} · waiting for first response`}</Text>
       )
@@ -597,8 +621,9 @@ export const register: Register = (on, options) => {
     const ttl = `${seen.ttlMs === LONG_TTL ? '1h' : '5m'}${seen.ttlBasis === 'assumed' ? ' (assumed)' : ''}`
     // Nothing read or written: there is no cached prefix to be warm.
     const isCold = seen.isCached === false || seen.isExpired === true || left <= 0
+    isFinalStretch = !isCold && left < FINAL
     const detail = !isCold
-      ? ` · ${span(left)} left of ${ttl} · last hit ${seen.hitPercent}%`
+      ? ` · ${isFinalStretch ? countdown(left) : span(left)} left of ${ttl} · last hit ${seen.hitPercent}%`
       : seen.isCached === false
         ? ' · last response used no cache'
         : seen.isExpired === true && left > 0

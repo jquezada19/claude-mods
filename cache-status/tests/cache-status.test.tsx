@@ -906,3 +906,54 @@ test('expiry heads-up: a subagent finishing books nothing; only the main turn en
   await turnEnd($)
   expect(n.booked.length).toBe(1)
 })
+
+
+test('under ten minutes the time left counts down as m:ss to zero', async ($, on) => {
+  const it = world(on)
+  await step($, it, warm(80_000))
+  await it.clock.advance(50 * MINUTE)
+  expect(await drawn($)).toContain('10m left of 1h')
+  await it.clock.advance(1_000)
+  expect(await drawn($)).toContain('9:59 left of 1h')
+  await it.clock.advance(9 * MINUTE + 49_000)
+  expect(await drawn($)).toContain('0:10 left of 1h')
+  await it.clock.advance(9_000)
+  expect(await drawn($)).toContain('0:01 left of 1h')
+  await it.clock.advance(1_000)
+  expect(await drawn($)).toContain('○ CACHE COLD')
+})
+
+test('a 5m cache counts down as m:ss from the start', async ($, on) => {
+  const it = world(on, T0, { settings: { promptCacheTtl: '5m' } })
+  await step($, it, warm(80_000))
+  expect(await drawn($)).toContain('5:00 left of 5m')
+  await it.clock.advance(61_000)
+  expect(await drawn($)).toContain('3:59 left of 5m')
+})
+
+test('the row redraws every second only in the final stretch', async ($, on) => {
+  const it = world(on)
+  on('session.start', () => ({ cwd: '/t' }) as never)
+  let redraws = 0
+  on('ui.invalidate', (_, e, next) => {
+    redraws += 1
+    return next(e)
+  })
+  await $.session.start({ cwd: '/t' } as never)
+  await step($, it, warm(80_000))
+  await drawn($)
+  redraws = 0
+  await it.clock.advance(15_000)
+  expect(redraws).toBe(1)
+  await it.clock.advance(50 * MINUTE - 15_000 + 1_000)
+  await drawn($)
+  redraws = 0
+  await it.clock.advance(5_000)
+  expect(redraws).toBe(5)
+  // Lapsed: back to one redraw per TICK.
+  await it.clock.advance(10 * MINUTE)
+  await drawn($)
+  redraws = 0
+  await it.clock.advance(15_000)
+  expect(redraws).toBe(1)
+})
