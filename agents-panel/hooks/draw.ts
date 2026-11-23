@@ -1,5 +1,5 @@
 import type { AgentRun, Session } from '../types'
-import { costumeOf, ctxPercent, elapsed, fmtTime, fmtTokens, modelName, reportsTokens, totals } from './agents'
+import { costumeOf, ctxPercent, elapsed, fmtTime, fmtTokens, fmtUsd, modelName, reportsTokens, totals } from './agents'
 import type { Totals } from './agents'
 import { ACCENT, CLAWD_CSS, CLAWD_W, clawd } from './sprite'
 
@@ -84,8 +84,10 @@ export const cardStats = (row: AgentRun, at: number, session: Session | null): s
   const asked = (row.checks?.asked ?? 0) > 0 ? ` · ${row.checks!.asked} asked` : ''
   const denied = (row.checks?.denied ?? 0) > 0 ? ` · ${row.checks!.denied} denied` : ''
   const awaiting = (row.pending ?? []).length > 0 ? ' · awaiting approval' : ''
+  // Zero is what the list says before the first request is priced: nothing to show yet.
+  const cost = row.usd === undefined || row.usd <= 0 ? '' : ` · ${fmtUsd(row.usd)}`
 
-  return `${ctx} · ${fmtTokens(row.tokens)} · ${time}${parked}${cut}${asked}${denied}${awaiting}`
+  return `${ctx} · ${fmtTokens(row.tokens)}${cost} · ${time}${parked}${cut}${asked}${denied}${awaiting}`
 }
 
 export const cardAlt = (row: AgentRun, at: number, session: Session | null): string =>
@@ -109,6 +111,7 @@ const statusMark = (x: number, y: number, status: AgentRun['status'], color: str
   if (status === 'running') return `<circle class="live" cx="${x}" cy="${y}" r="3.5" fill="${color}"/>`
   if (status === 'done') return `<path d="M${x - 5} ${y}l3.5 3.5 6.5-7" fill="none" stroke="${DONE}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>`
   if (status === 'failed') return `<path d="M${x - 4} ${y - 4}l8 8M${x + 4} ${y - 4}l-8 8" stroke="${FAIL}" stroke-width="1.8" stroke-linecap="round"/>`
+  if (status === 'stopped') return `<rect x="${x - 4}" y="${y - 4}" width="8" height="8" rx="1" fill="${LOST}"/>`
 
   return `<circle cx="${x}" cy="${y}" r="5" fill="none" stroke="${LOST}" stroke-width="1.4"/>`
 }

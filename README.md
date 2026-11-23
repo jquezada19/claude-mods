@@ -131,9 +131,11 @@ walks in front as its own sprite (as many as fit, up to six, then `+n`); the
 terminal shows a magenta `●` instead. The pane (`/agents-panel` toggles it,
 since `/agents` is the engine's built-in; it opens itself once per session on
 the first agent unless `autoOpen` is off) has one card per subagent: description, type, model and
-effort, context fill (a percent only when the agent runs the session's model),
-tokens, elapsed and a status mark. No dollars: the engine prices nothing per
-model. Details, every costume and the `lost` status: [agents-panel/README.md](agents-panel/README.md).
+effort, context fill against the agent's own model window, tokens, the cost
+Claude Code credited it, elapsed and a status mark (`stopped` apart from
+`failed`). Claude Code's own agent rows get the same context fill and cost in
+front of their words (`agentRows`). Details, every costume and the `lost`
+status: [agents-panel/README.md](agents-panel/README.md).
 
 ### repo-diffs
 

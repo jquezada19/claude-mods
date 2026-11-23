@@ -1,4 +1,5 @@
-export type AgentStatus = 'running' | 'done' | 'failed' | 'lost'
+/** `stopped`: the person or the engine stopped the run (agent.report `stopped`, or `killed` in $.agent.list()). */
+export type AgentStatus = 'running' | 'done' | 'failed' | 'stopped' | 'lost'
 
 /** One subagent of the session, keyed by the agentId the engine answered the spawn with. */
 export type AgentRun = {
@@ -12,6 +13,21 @@ export type AgentRun = {
   endedAt?: number
   /** The latest step's input side: input + cache read + cache write. */
   contextTokens: number
+  /**
+   * Set while contextTokens came from a completion's usage (a turn's requests summed),
+   * not from one request: no context percent is drawn from it. A real step clears it.
+   */
+  contextIsSum?: true
+  /**
+   * Set when the run's end came from the engine's report (agent.report), the engine's
+   * own word on it: the agent list's `killed` does not override it. Cleared when the row
+   * runs again.
+   */
+  isReported?: true
+  /** The context window of the model it runs on, as $.agent.list() reports it (Claude Code 2.1.326+). */
+  window?: number
+  /** What /cost credited for its requests, an estimate, as $.agent.list() reports it. */
+  usd?: number
   /** Every step's four counts, summed. */
   tokens: number
   steps: number
@@ -86,6 +102,8 @@ export type EarlyStep = {
   /** The held steps' newest tool lines (three at most), and whether one stopped at the output limit. */
   tools?: string[]
   isCutOff?: true
+  /** How the engine reported the run ended, when that came before the card too. */
+  reported?: { status: 'completed' | 'failed' | 'stopped'; at: number }
   /** A completion that also came first, applied right after the card opens. */
   ended?: { reason: string; at: number; turnId: string; usage: EarlyUsage | null; answer?: string }
 }

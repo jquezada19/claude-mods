@@ -22,7 +22,7 @@ type Usage = {
   cache_creation_input_tokens: number
   model: string
 }
-type Info = { id: string; status: string }
+type Info = { id: string; status: string; model?: string; effort?: unknown; contextWindowSize?: number; cost?: { usd: number } }
 
 /** The engine beneath the mod: a clock, the agent list, the session usage, the panes, and the spawn answer. */
 const world = (on: On, now = T0) => {
@@ -54,6 +54,8 @@ const world = (on: On, now = T0) => {
     /** The next step's tool uses and stop reason. */
     toolUses: [] as { name: string; input: unknown }[],
     stopReason: 'end_turn' as string | null,
+    /** The props the engine's own AgentRow received last (what the mod passed down). */
+    agentRow: null as Record<string, unknown> | null,
   }
   // The test engine has no state noun: mirror every write the mod makes so a test can read it back.
   // `stateSetFailsOnce` stands for the mod's own bookkeeping throwing after a spawn's next().
@@ -126,9 +128,13 @@ const world = (on: On, now = T0) => {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: it.toolUses, stopReason: it.stopReason, usage: it.usage } as never
   })
   on('turn.complete', () => ({ text: '' }))
-  on('ui.render', (_, e) =>
-    e.component === 'AbovePrompt' && it.beneath !== '' ? ({ type: 'Text', props: {}, children: [it.beneath] } as never) : EMPTY,
-  )
+  on('ui.render', (_, e) => {
+    if (e.component === 'AgentRow') {
+      it.agentRow = e.props as never
+    }
+
+    return e.component === 'AbovePrompt' && it.beneath !== '' ? ({ type: 'Text', props: {}, children: [it.beneath] } as never) : EMPTY
+  })
 
   return it
 }
@@ -363,7 +369,7 @@ test('what arrives before the card (tools, a cut-off, a long answer) is held cli
   expect(a!.detail?.answer?.startsWith('Early.')).toBe(true)
 })
 
-test('a resumed spawn shows its new task; the earlier run\'s tools and answer go', async ($, on) => {
+test("a resumed spawn shows its new task; the earlier run\'s tools and answer go", async ($, on) => {
   const it = world(on)
   await $.session.start({ cwd: '/t' } as never)
   await spawn($, 'a')
@@ -434,7 +440,7 @@ test('an agent id that looks like a button key cannot collide with one', async (
   }
 })
 
-test('a subagent\'s permission checks reach its card; the engine\'s answer passes through whole; the main loop is not counted', async ($, on) => {
+test("a subagent\'s permission checks reach its card; the engine\'s answer passes through whole; the main loop is not counted", async ($, on) => {
   const it = world(on)
   let decided: Record<string, unknown> = { decision: 'ask', reason: 'needs approval', rule: 'Bash(rm:*)' }
   on('tool.check', () => decided as never)
@@ -574,7 +580,7 @@ test('reconcile: the main turn forces it, the tick throttles it, absence times o
   ]
   await complete($)
   let list = await rows(it)
-  expect(list.map(r => r.status)).toEqual(['done', 'failed', 'running', 'running'])
+  expect(list.map(r => r.status)).toEqual(['done', 'stopped', 'running', 'running'])
   expect(list[3]!.missingSince).toBe(T0)
   // 1 s later another main-turn end still reconciles (forced), even inside the throttle window.
   it.infos = [{ id: 'id-c', status: 'running' }, { id: 'id-d', status: 'running' }]
@@ -843,7 +849,8 @@ test('desktop: the pane draws at most 50 finished cards and a +n line; a lost ro
   await spawn($, 'ghost')
   it.infos = []
   await complete($)
-  await it.clock.advance(60 * SECOND)
+  // 60 s of absence, read by the next throttled tick (each ended subagent's settle read moves the window).
+  await it.clock.advance(70 * SECOND)
   const p = await pane($, 'desktop')
   // The header and 50 cards: the lost ghost is a finished row like the sixty done ones.
   expect(p.svgs.length).toBe(1 + 50)
@@ -1075,7 +1082,7 @@ test('spawn: agents number in spawn order, so six general-purpose cards wear fiv
   expect(new Set(costumes)).toEqual(new Set(['plain', 'pirate', 'detective', 'engineer', 'chef']))
 })
 
-test('launch: the main turn\'s end closes a backgrounded run whose task is no longer in flight, its notification lost', async ($, on) => {
+test("launch: the main turn\'s end closes a backgrounded run whose task is no longer in flight, its notification lost", async ($, on) => {
   const it = world(on)
   const sh = shell(on)
   on('classic.Stop', () => ({}) as never)
@@ -1196,4 +1203,219 @@ test('a step in flight when its run ended lands late: the row stays finished', a
     // drain
   }
   expect((await rows(it))[0]!.status).toBe('running')
+})
+
+
+test("the list's per-agent figures reach the card: a subagent on another model gets its own context percent and its cost", async ($, on) => {
+  const it = world(on)
+  await $.session.start({ cwd: '/t' } as never)
+  await step($, it, u(1000))
+  await spawn($, 'Explore')
+  await step($, it, u(82_000, 100, 0, 0, 'claude-sonnet-5-5'), 'id-Explore')
+  it.infos = [{ id: 'id-Explore', status: 'running', model: 'claude-sonnet-5-5', contextWindowSize: 1_000_000, cost: { usd: 0.42 } }]
+  await complete($)
+  const [a] = await rows(it)
+  expect(a).toMatchObject({ window: 1_000_000, usd: 0.42, model: 'claude-sonnet-5-5' })
+  const p = await pane($, 'terminal')
+  expect(p.texts).toContain('ctx 8% · 82k')
+  expect(p.texts).toContain('$0.42')
+  await p.done()
+})
+
+test('agent.report: a stopped run shows as stopped, and passes its report through untouched', async ($, on) => {
+  const it = world(on)
+  on('agent.report', (_, e) => ({ text: `${e.text} (reviewed)` }) as never)
+  await $.session.start({ cwd: '/t' } as never)
+  await spawn($, 'Plan')
+  await step($, it, u(10), 'id-Plan')
+  const out = await $.agent.report({ agentId: 'id-Plan', subagentType: 'Plan', provider: { plugin: 'engine', tier: 'core' }, status: 'stopped', text: 'partial' } as never)
+  // What the hooks beneath answered (a rewrite) reaches the engine whole.
+  expect(out).toEqual({ text: 'partial (reviewed)' })
+  let [a] = await rows(it)
+  expect(a!.status).toBe('stopped')
+  // Its completion afterwards (an error, as a stopped run's reads) does not turn it into failed.
+  await complete($, 'id-Plan', 'aborted')
+  ;[a] = await rows(it)
+  expect(a!.status).toBe('stopped')
+  const p = await pane($, 'terminal')
+  expect(p.texts).toContain('■')
+  await p.done()
+})
+
+const agentRow = ($: Kit, props: Record<string, unknown>) =>
+  $.ui.mount({ plugin: 'agents-panel', surface: 'terminal', component: 'AgentRow', requestId: String(props['id']), props } as never)
+
+const ROW_PROPS = {
+  description: '', type: 'x', status: 'running', kind: 'local_agent', taskStatus: 'running', startTime: T0, cwd: '/t',
+  tokenSamples: [], hasRow: true, isHidden: false,
+}
+
+test("AgentRow: the engine's own row gets context fill and cost in front of its words; nothing else changes", async ($, on) => {
+  const it = world(on)
+  await $.session.start({ cwd: '/t' } as never)
+  await spawn($, 'Explore')
+  await step($, it, u(50_000), 'id-Explore')
+  await agentRow($, {
+    ...ROW_PROPS, id: 'id-Explore', type: 'Explore', label: 'Reading files', tokenCount: 50_100,
+    contextWindowSize: 200_000, cost: { usd: 0.3 }, rowIds: ['id-Explore'],
+  })
+  expect(it.agentRow).not.toBe(null)
+  expect(it.agentRow!['label']).toBe('25% ctx · $0.30 · Reading files')
+  expect(it.agentRow!['isHidden']).toBe(false)
+  expect(it.agentRow!['id']).toBe('id-Explore')
+  expect(it.agentRow!['tokenCount']).toBe(50_100)
+})
+
+test('AgentRow: nothing known, the row passes as the engine drew it', async ($, on) => {
+  const it = world(on)
+  await $.session.start({ cwd: '/t' } as never)
+  await agentRow($, { ...ROW_PROPS, id: 'id-zz', label: 'Thinking', tokenCount: 0, rowIds: ['id-zz'] })
+  expect(it.agentRow!['label']).toBe('Thinking')
+})
+
+test('AgentRow: with agentRows off, the row passes as the engine drew it', { options: { agentRows: false } }, async ($, on) => {
+  const it = world(on)
+  await $.session.start({ cwd: '/t' } as never)
+  await agentRow($, {
+    ...ROW_PROPS, id: 'id-zz', label: 'Thinking', tokenCount: 20_000, contextWindowSize: 200_000, cost: { usd: 1 }, rowIds: ['id-zz'],
+  })
+  expect(it.agentRow!['label']).toBe('Thinking')
+})
+
+
+test('agent.report: a consumed report passes through as consumed', async ($, on) => {
+  world(on)
+  on('agent.report', () => ({ consumed: 'handled' }) as never)
+  await $.session.start({ cwd: '/t' } as never)
+  await spawn($, 'Plan')
+  const out = await $.agent.report({ agentId: 'id-Plan', subagentType: 'Plan', provider: { plugin: 'engine', tier: 'core' }, status: 'completed', text: 'x' } as never)
+  expect(out).toEqual({ consumed: 'handled' })
+})
+
+test('agent.report: a stop reported before the card opens lands on it when it does', async ($, on) => {
+  const it = world(on)
+  on('agent.report', (_, e) => ({ text: e.text }) as never)
+  await $.session.start({ cwd: '/t' } as never)
+  await $.agent.report({ agentId: 'id-Plan', subagentType: 'Plan', provider: { plugin: 'engine', tier: 'core' }, status: 'stopped', text: '' } as never)
+  expect((await rows(it)).length).toBe(0)
+  await spawn($, 'Plan')
+  let [a] = await rows(it)
+  expect(a!.status).toBe('stopped')
+  await complete($, 'id-Plan', 'aborted')
+  ;[a] = await rows(it)
+  expect(a!.status).toBe('stopped')
+})
+
+test('a subagent that ends while the main loop is idle still gets its final figures a moment later', async ($, on) => {
+  const it = world(on)
+  await $.session.start({ cwd: '/t' } as never)
+  await spawn($, 'Explore')
+  await step($, it, u(10), 'id-Explore')
+  await complete($, 'id-Explore')
+  expect((await rows(it))[0]!.usd).toBe(undefined)
+  // The engine settles the cost after the completion; no main turn ends and no row runs.
+  it.infos = [{ id: 'id-Explore', status: 'completed', cost: { usd: 0.77 } }]
+  await it.clock.advance(3 * SECOND)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  expect((await rows(it))[0]!.usd).toBe(0.77)
+})
+
+
+test('AgentRow: an empty label takes the figures alone, with no dangling separator', async ($, on) => {
+  const it = world(on)
+  await $.session.start({ cwd: '/t' } as never)
+  await agentRow($, { ...ROW_PROPS, id: 'id-e', label: '', tokenCount: 20_000, contextWindowSize: 200_000, rowIds: ['id-e'] })
+  expect(it.agentRow!['label']).toBe('10% ctx')
+})
+
+test('a card shows no cost while the list still says zero, and the cost once it does not', async ($, on) => {
+  const it = world(on)
+  await $.session.start({ cwd: '/t' } as never)
+  await spawn($, 'Explore')
+  await step($, it, u(1000), 'id-Explore')
+  it.infos = [{ id: 'id-Explore', status: 'running', cost: { usd: 0 } }]
+  await complete($)
+  let p = await pane($, 'terminal')
+  expect(p.texts).not.toContain('$0.00')
+  await p.done()
+  it.infos = [{ id: 'id-Explore', status: 'running', cost: { usd: 0.05 } }]
+  await it.clock.advance(SECOND)
+  await complete($)
+  p = await pane($, 'terminal')
+  expect(p.texts).toContain('$0.05')
+  await p.done()
+})
+
+
+test('agent.report: an early stop survives a step that also comes before the card', async ($, on) => {
+  const it = world(on)
+  on('agent.report', (_, e) => ({ text: e.text }) as never)
+  await $.session.start({ cwd: '/t' } as never)
+  await $.agent.report({ agentId: 'id-Plan', subagentType: 'Plan', provider: { plugin: 'engine', tier: 'core' }, status: 'stopped', text: '' } as never)
+  await step($, it, u(10), 'id-Plan')
+  await spawn($, 'Plan')
+  const [a] = await rows(it)
+  expect(a!.status).toBe('stopped')
+  expect(a!.steps).toBe(1)
+})
+
+test('agent.report: a report that arrives after /clear took its card away does not land on a later run of that id', async ($, on) => {
+  const it = world(on)
+  on('agent.report', (_, e) => ({ text: e.text }) as never)
+  on('session.end', () => ({ sessionId: 's1' }) as never)
+  await $.session.start({ cwd: '/t' } as never)
+  await spawn($, 'Plan')
+  await complete($, 'id-Plan', 'aborted')
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  expect((await rows(it)).length).toBe(0)
+  await $.agent.report({ agentId: 'id-Plan', subagentType: 'Plan', provider: { plugin: 'engine', tier: 'core' }, status: 'stopped', text: '' } as never)
+  await it.clock.advance(5 * SECOND)
+  await spawn($, 'Plan')
+  const [a] = await rows(it)
+  expect(a!.status).toBe('running')
+})
+
+test('agent.report: an early report waits for its card however slow the spawn is', async ($, on) => {
+  const it = world(on)
+  on('agent.report', (_, e) => ({ text: e.text }) as never)
+  await $.session.start({ cwd: '/t' } as never)
+  await $.agent.report({ agentId: 'id-Plan', subagentType: 'Plan', provider: { plugin: 'engine', tier: 'core' }, status: 'stopped', text: '' } as never)
+  await it.clock.advance(90 * SECOND)
+  await spawn($, 'Plan')
+  const [a] = await rows(it)
+  expect(a!.status).toBe('stopped')
+})
+
+test('settle: an agent that ends while a settle read waits gets one of its own after it', async ($, on) => {
+  const it = world(on)
+  await $.session.start({ cwd: '/t' } as never)
+  await spawn($, 'a')
+  await spawn($, 'b')
+  await complete($, 'id-a')
+  await it.clock.advance(2 * SECOND)
+  await complete($, 'id-b')
+  it.infos = [{ id: 'id-a', status: 'completed', cost: { usd: 0.1 } }]
+  await it.clock.advance(SECOND)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  // b's cost lands after the first read; the second read, 3 s later, picks it up.
+  it.infos = [{ id: 'id-a', status: 'completed', cost: { usd: 0.1 } }, { id: 'id-b', status: 'completed', cost: { usd: 0.2 } }]
+  await it.clock.advance(3 * SECOND)
+  await new Promise<void>(resolve => setTimeout(resolve, 20))
+  const list = await rows(it)
+  expect(list.find(r => r.id === 'id-b')!.usd).toBe(0.2)
+})
+
+
+test('agent.report: a run spawned again under an id /clear took away gets its own report', async ($, on) => {
+  const it = world(on)
+  on('agent.report', (_, e) => ({ text: e.text }) as never)
+  on('session.end', () => ({ sessionId: 's1' }) as never)
+  await $.session.start({ cwd: '/t' } as never)
+  await spawn($, 'Plan')
+  await complete($, 'id-Plan')
+  await $.session.end({ reason: 'clear', sessionId: 's1' } as never)
+  await spawn($, 'Plan')
+  await $.agent.report({ agentId: 'id-Plan', subagentType: 'Plan', provider: { plugin: 'engine', tier: 'core' }, status: 'stopped', text: '' } as never)
+  const [a] = await rows(it)
+  expect(a!.status).toBe('stopped')
 })

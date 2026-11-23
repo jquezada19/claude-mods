@@ -79,7 +79,7 @@ export const reopenRow = (a: AgentRun, at: number): AgentRun => {
     return a
   }
 
-  const { endedAt, missingSince: _dropped, ...rest } = a
+  const { endedAt, missingSince: _dropped, isReported: _reported, ...rest } = a
 
   return { ...rest, status: 'running', startedAt: at - (endedAt - a.startedAt) }
 }
@@ -167,15 +167,16 @@ export const applyStep = (
   }
 
   const isNewTurn = turnId !== undefined && seen === undefined && turnId !== found.turnId
-  const isFinished = found.status === 'done' || found.status === 'failed'
+  const isFinished = found.status === 'done' || found.status === 'failed' || found.status === 'stopped'
   const isResumed =
     found.external === undefined &&
     isFinished &&
     isNewTurn &&
     (began === undefined || found.endedAt === undefined || began >= found.endedAt)
   const a = isResumed ? reopenRow(found, at) : found
+  const { contextIsSum: _sum, ...measured } = settled(withoutMissing(a))
   const next: AgentRun = {
-    ...settled(withoutMissing(a)),
+    ...measured,
     model: usage.model || model || a.model,
     effort: typeof effort === 'string' ? effort : a.effort,
     contextTokens: sum.context,
@@ -217,16 +218,26 @@ export const applyComplete = (
   const seen = turnId === undefined ? a.steps : (a.turns?.[turnId] ?? 0)
   const sum = seen === 0 && usage !== null ? sumUsage(usage) : null
   const isOlderTurn = turnId !== undefined && turnId !== a.turnId && a.turns?.[turnId] !== undefined
+  // A run its report already called stopped stays stopped: the completion of a stopped
+  // run reads as an error ('aborted'), which is not how it ended. Only for the run that
+  // stopped: a completion of a turn the row has not seen is a resumed run's own end.
+  // A report marks the run it ended (a resume clears the mark), so a reported stop is this
+  // run's; without one, only a completion of the turn that stopped (or of a row that has
+  // seen no turn at all) is.
+  const isSameRun =
+    turnId === undefined || (a.turnId === undefined && a.turns === undefined) || turnId === a.turnId || a.turns?.[turnId] !== undefined
+  const keepsStop = a.status === 'stopped' && reason !== 'answer' && (a.isReported === true || isSameRun)
   const next: AgentRun = {
     ...settled(a),
-    status: reason === 'answer' ? 'done' : 'failed',
-    endedAt: at,
+    status: reason === 'answer' ? 'done' : keepsStop ? 'stopped' : 'failed',
+    endedAt: keepsStop && a.endedAt !== undefined ? a.endedAt : at,
     ...(turnId === undefined || isOlderTurn ? {} : { turnId }),
     ...(sum === null
       ? {}
       : {
           tokens: a.tokens + sum.tokens,
           contextTokens: sum.context,
+          contextIsSum: true as const,
           steps: a.steps + 1,
           model: usage?.model || a.model,
           ...(turnId === undefined ? {} : { turns: noteTurn(a.turns, turnId, FELL_BACK) }),
@@ -236,16 +247,73 @@ export const applyComplete = (
   return replaceAt(list, i, next)
 }
 
-/** What $.agent.list() says about every running row; absence is timed and ends in failed (had steps) or lost (had none). */
-export const reconcileRows = (list: AgentRun[], infos: readonly { id: string; status: string }[], at: number): AgentRun[] => {
-  const status = new Map(infos.map(one => [one.id, one.status]))
+/**
+ * One agent as $.agent.list() gives it: its status, and since Claude Code 2.1.326 the
+ * model it runs on, its effort, its model's context window and what /cost credited it.
+ */
+export type ListedAgent = {
+  id: string
+  status: string
+  model?: string
+  effort?: unknown
+  contextWindowSize?: number
+  cost?: { usd?: unknown }
+}
+
+/** The figures a listed agent carries, onto its row; the same row back when nothing differs. */
+export const withListedFigures = (a: AgentRun, info: ListedAgent): AgentRun => {
+  const model = typeof info.model === 'string' && info.model !== '' ? info.model : a.model
+  const effort =
+    typeof info.effort === 'string' ? info.effort : typeof info.effort === 'number' && Number.isFinite(info.effort) ? String(info.effort) : a.effort
+  const window =
+    typeof info.contextWindowSize === 'number' && Number.isFinite(info.contextWindowSize) && info.contextWindowSize > 0
+      ? info.contextWindowSize
+      : a.window
+  const usd = typeof info.cost?.usd === 'number' && Number.isFinite(info.cost.usd) && info.cost.usd >= 0 ? info.cost.usd : a.usd
+
+  if (model === a.model && effort === a.effort && window === a.window && usd === a.usd) {
+    return a
+  }
+
+  return {
+    ...a,
+    model,
+    ...(effort === undefined ? {} : { effort }),
+    ...(window === undefined ? {} : { window }),
+    ...(usd === undefined ? {} : { usd }),
+  }
+}
+
+/**
+ * What $.agent.list() says about every row it lists: the figures for any row of the
+ * engine's own (not an external one), and for a running row how it stands. Absence of a
+ * running row is timed and ends in failed (had steps) or lost (had none).
+ */
+export const reconcileRows = (list: AgentRun[], infos: readonly ListedAgent[], at: number): AgentRun[] => {
+  const byId = new Map(infos.map(one => [one.id, one]))
   let changed = false
-  const out = list.map(a => {
+  const out = list.map(row => {
+    const info = row.external === undefined ? byId.get(row.id) : undefined
+    const a = info === undefined ? row : withListedFigures(row, info)
+
+    if (a !== row) {
+      changed = true
+    }
+
+    // Killed is the engine's own word that the run was stopped: it corrects a row its
+    // completion already marked failed (a stopped run's completion reads as an error),
+    // keeping the row's end. A teammate raises no report, so this is how it gets there.
+    if (a.status === 'failed' && a.isReported !== true && info?.status === 'killed') {
+      changed = true
+
+      return { ...a, status: 'stopped' as const }
+    }
+
     if (a.status !== 'running' || a.external !== undefined) {
       return a
     }
 
-    const s = status.get(a.id)
+    const s = info?.status
 
     if (s === 'completed') {
       changed = true
@@ -253,10 +321,17 @@ export const reconcileRows = (list: AgentRun[], infos: readonly { id: string; st
       return { ...settled(withoutMissing(a)), status: 'done' as const, endedAt: at }
     }
 
-    if (s === 'failed' || s === 'killed') {
+    if (s === 'failed') {
       changed = true
 
       return { ...settled(withoutMissing(a)), status: 'failed' as const, endedAt: at }
+    }
+
+    // Killed: stopped by the person (or the engine), not a failure of the run.
+    if (s === 'killed') {
+      changed = true
+
+      return { ...settled(withoutMissing(a)), status: 'stopped' as const, endedAt: at }
     }
 
     if (s !== undefined) {
@@ -305,6 +380,42 @@ export const fmtTokens = (n: number): string => {
   return `${(Math.round(n / 100_000) / 10).toFixed(1)}M`
 }
 
+/** Dollars to the cent, or `<$0.01` for a run that cost less than a cent but not nothing. */
+export const fmtUsd = (usd: number): string => (usd > 0 && usd < 0.005 ? '<$0.01' : `$${usd.toFixed(2)}`)
+
+/**
+ * What the engine's own agent row (AgentRow) gets in front of its words: the agent's
+ * context fill and its cost, `42% ctx · $0.31 · `, or nothing when neither is known.
+ * The fill is this panel's own reading of the latest request's input side when the row
+ * has stepped; before that, the engine's token count (its latest input plus all output).
+ */
+export const agentRowPrefix = (
+  info: { tokenCount?: unknown; contextWindowSize?: unknown; cost?: { usd?: unknown } },
+  row?: AgentRun,
+): string => {
+  const engineWin =
+    typeof info.contextWindowSize === 'number' && Number.isFinite(info.contextWindowSize) && info.contextWindowSize > 0
+      ? info.contextWindowSize
+      : null
+  // The panel's reading of one real request, against the window it was read with; else
+  // the engine's count against the engine's window as this same render gives it.
+  const isMeasured = row !== undefined && row.steps > 0 && !isSummed(row) && row.contextTokens > 0
+  // The engine's window is the current model's (it moves with a fallback); the row's is
+  // what the last reconcile saw.
+  const rowWin = row?.window !== undefined && row.window > 0 ? row.window : null
+  const win = isMeasured ? (engineWin ?? rowWin) : engineWin
+  const used = isMeasured ? row.contextTokens : typeof info.tokenCount === 'number' ? info.tokenCount : null
+  const usd = typeof info.cost?.usd === 'number' && Number.isFinite(info.cost.usd) ? info.cost.usd : row?.usd
+  const parts = [
+    ...(win !== null && used !== null && Number.isFinite(used) && used > 0
+      ? [`${Math.min(100, Math.round((used * 100) / win))}% ctx`]
+      : []),
+    ...(usd !== undefined && usd > 0 ? [fmtUsd(usd)] : []),
+  ]
+
+  return parts.length === 0 ? '' : `${parts.join(' · ')} · `
+}
+
 /** m:ss under an hour, h:mm:ss above; never negative. */
 export const fmtTime = (ms: number): string => {
   const s = Math.max(0, Math.round(ms / 1000))
@@ -331,8 +442,28 @@ export const modelName = (id: string): string => {
   return `${family.charAt(0).toUpperCase()}${family.slice(1).toLowerCase()} ${major}${minor === undefined ? '' : `.${minor}`}`
 }
 
-/** The row's context against the session window, only when it runs the session's model. */
+/**
+ * Whether the row's context is a completion's sum over a turn rather than one request:
+ * marked since 0.6.0, and for a row left by 0.5.0, a current turn counted by its fallback.
+ */
+export const isSummed = (row: AgentRun): boolean =>
+  row.contextIsSum === true || (row.turnId !== undefined && row.turns?.[row.turnId] === FELL_BACK)
+
+/**
+ * The row's context against its own model's window when the engine reported one;
+ * otherwise against the session's window, and then only when it runs the session's model.
+ */
 export const ctxPercent = (row: AgentRun, session: Session | null): number | null => {
+  // Nothing measured yet (a teammate in a pane of its own reports nothing here), or a
+  // reading that is a turn's requests summed: no percent rather than a wrong one.
+  if (isSummed(row) || (row.steps === 0 && row.contextTokens === 0)) {
+    return null
+  }
+
+  if (row.window !== undefined && row.window > 0) {
+    return Math.min(100, Math.round((row.contextTokens * 100) / row.window))
+  }
+
   if (session === null || session.window === null || session.window <= 0) {
     return null
   }
@@ -371,6 +502,35 @@ export const costumeOf = (type: string, variant?: number): Costume => {
   if (bare === 'claude-code-guide') return 'chef'
 
   return variant === undefined ? 'plain' : CLAWDS[variant % CLAWDS.length]!
+}
+
+/**
+ * How the engine reported the run ended (agent.report): completed is done, failed is
+ * failed, stopped is stopped. The report is the engine's own word on the end, so it
+ * settles a row a completion already marked (a stopped run's completion reads as an
+ * error); it never reopens one, and an external row has no report.
+ */
+export const applyReport = (
+  list: AgentRun[],
+  id: string,
+  reported: 'completed' | 'failed' | 'stopped',
+  at: number,
+): AgentRun[] => {
+  const i = list.findIndex(a => a.id === id)
+  const a = list[i]
+
+  if (a === undefined || a.external !== undefined || a.status === 'lost') {
+    return list
+  }
+
+  const status = reported === 'completed' ? 'done' : reported
+  const endedAt = a.endedAt ?? at
+
+  if (a.status === status && a.endedAt === endedAt && a.isReported === true) {
+    return list
+  }
+
+  return replaceAt(list, i, { ...settled(withoutMissing(a)), status, endedAt, isReported: true })
 }
 
 /** An external row's end, as its call's result or its done file said; a row already over keeps its status. */

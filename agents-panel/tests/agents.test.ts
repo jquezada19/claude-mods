@@ -26,6 +26,10 @@ import {
   reconcileRows,
   sumUsage,
   totals,
+  applyReport,
+  agentRowPrefix,
+  fmtUsd,
+  isSummed,
 } from '../hooks/agents'
 
 const T0 = 1_000_000
@@ -148,7 +152,7 @@ test('applyComplete: reason maps to status, endedAt is the given clock, the zero
   expect(applyComplete([row('a')], 'nope', 'answer', null, T0).length).toBe(1)
 })
 
-test('reconcileRows: list statuses map, absence times out to failed with steps and lost without', async () => {
+test('reconcileRows: list statuses map (killed is stopped), absence times out to failed with steps and lost without', async () => {
   const list = [row('a'), row('b'), row('c'), row('d', { steps: 3 }), row('e'), row('f', { status: 'done' })]
   const r1 = reconcileRows(
     list,
@@ -159,7 +163,7 @@ test('reconcileRows: list statuses map, absence times out to failed with steps a
     ],
     T0 + 1,
   )
-  expect(r1.map(a => a.status)).toEqual(['done', 'failed', 'running', 'running', 'running', 'done'])
+  expect(r1.map(a => a.status)).toEqual(['done', 'stopped', 'running', 'running', 'running', 'done'])
   expect(r1[0]!.endedAt).toBe(T0 + 1)
   expect(r1[3]!.missingSince).toBe(T0 + 1)
   expect(r1[4]!.missingSince).toBe(T0 + 1)
@@ -194,6 +198,151 @@ test('formatting: tokens, time, model key and name', async () => {
   expect(modelName('claude-haiku-5-5')).toBe('Haiku 5.5')
   expect(modelName('claude-custom-x')).toBe('custom-x')
   expect(modelName('')).toBe('—')
+})
+
+test("reconcileRows: a listed agent's model, effort, window and cost reach its row, running or finished", async () => {
+  const list = [row('a', { model: 'claude-opus-5-5' }), row('b', { status: 'done', endedAt: T0 })]
+  const out = reconcileRows(
+    list,
+    [
+      { id: 'a', status: 'running', model: 'claude-sonnet-5-5', effort: 'high', contextWindowSize: 1_000_000, cost: { usd: 0.42 } },
+      { id: 'b', status: 'completed', model: 'claude-haiku-5-5', effort: 3, contextWindowSize: 200_000, cost: { usd: 0.01 } },
+    ],
+    T0 + 1,
+  )
+  expect(out[0]).toMatchObject({ model: 'claude-sonnet-5-5', effort: 'high', window: 1_000_000, usd: 0.42, status: 'running' })
+  expect(out[1]).toMatchObject({ model: 'claude-haiku-5-5', effort: '3', window: 200_000, usd: 0.01, status: 'done', endedAt: T0 })
+  // Missing or bad figures keep what the row had; the same figures again change nothing.
+  const kept = reconcileRows(out, [{ id: 'a', status: 'running', model: '', contextWindowSize: 0, cost: { usd: Number.NaN } }], T0 + 2)
+  expect(kept[0]).toMatchObject({ model: 'claude-sonnet-5-5', window: 1_000_000, usd: 0.42 })
+  const again = reconcileRows(
+    out,
+    [
+      { id: 'a', status: 'running', model: 'claude-sonnet-5-5', effort: 'high', contextWindowSize: 1_000_000, cost: { usd: 0.42 } },
+      { id: 'b', status: 'completed', model: 'claude-haiku-5-5', effort: 3, contextWindowSize: 200_000, cost: { usd: 0.01 } },
+    ],
+    T0 + 3,
+  )
+  expect(again).toBe(out)
+  // An external row is never the engine's, whatever shares its id.
+  const ext = [row('x', { external: { doneFile: null, deadline: null } })]
+  expect(reconcileRows(ext, [{ id: 'x', status: 'running', contextWindowSize: 9, cost: { usd: 1 } }], T0)).toBe(ext)
+})
+
+test("ctxPercent: against the row's own window when the engine gave one, whatever the session model", async () => {
+  const a = row('a', { contextTokens: 82_000, model: 'claude-sonnet-5-5', window: 1_000_000 })
+  expect(ctxPercent(a, { model: 'claude-opus-5-5', window: 200_000 })).toBe(8)
+  expect(ctxPercent(a, null)).toBe(8)
+  expect(ctxPercent(row('b', { contextTokens: 2_000_000, window: 1_000_000 }), null)).toBe(100)
+})
+
+test('applyReport: completed is done, failed failed, stopped stopped; it settles a completion, never reopens, skips external and lost', async () => {
+  const run = () => [row('a', { steps: 2 })]
+  expect(applyReport(run(), 'a', 'completed', T0 + 5)[0]).toMatchObject({ status: 'done', endedAt: T0 + 5 })
+  expect(applyReport(run(), 'a', 'failed', T0 + 5)[0]).toMatchObject({ status: 'failed', endedAt: T0 + 5 })
+  expect(applyReport(run(), 'a', 'stopped', T0 + 5)[0]).toMatchObject({ status: 'stopped', endedAt: T0 + 5 })
+  // A completion marked it failed (a stopped run's completion is an error); the report corrects it, keeping its end.
+  const completed = applyComplete(run(), 'a', 'aborted', null, T0 + 3)
+  expect(completed[0]!.status).toBe('failed')
+  expect(applyReport(completed, 'a', 'stopped', T0 + 9)[0]).toMatchObject({ status: 'stopped', endedAt: T0 + 3 })
+  // The same verdict twice is the same list; unknown, external and lost rows are left alone.
+  const stopped = applyReport(run(), 'a', 'stopped', T0 + 5)
+  expect(applyReport(stopped, 'a', 'stopped', T0 + 6)).toBe(stopped)
+  expect(applyReport(run(), 'zz', 'stopped', T0)).toEqual(run())
+  const ext = [row('x', { external: { doneFile: null, deadline: null } })]
+  expect(applyReport(ext, 'x', 'stopped', T0)).toBe(ext)
+  const lost = [row('l', { status: 'lost', endedAt: T0 })]
+  expect(applyReport(lost, 'l', 'completed', T0 + 1)).toBe(lost)
+})
+
+test('applyComplete: a run its report called stopped stays stopped through a later error completion', async () => {
+  const stopped = applyReport([row('a', { steps: 1 })], 'a', 'stopped', T0 + 2)
+  expect(applyComplete(stopped, 'a', 'aborted', null, T0 + 4)[0]).toMatchObject({ status: 'stopped', endedAt: T0 + 2 })
+  // An answer still means done.
+  expect(applyComplete(stopped, 'a', 'answer', null, T0 + 4)[0]!.status).toBe('done')
+})
+
+test('agentRowPrefix: context fill and cost, from the panel row once it stepped, else from the engine figures', async () => {
+  // The panel row's own reading (latest input side) and window win once it has stepped.
+  expect(agentRowPrefix({ tokenCount: 1 }, row('a', { steps: 1, contextTokens: 50_000, window: 200_000, usd: 0.3 })))
+    .toBe('25% ctx · $0.30 · ')
+  // The engine's window, as this render gives it, wins over the row's older one (a model fallback moved it).
+  expect(agentRowPrefix({ tokenCount: 1, contextWindowSize: 1_000_000 }, row('a', { steps: 1, contextTokens: 50_000, window: 200_000 })))
+    .toBe('5% ctx · ')
+  // A reading that is a turn's requests summed is not the panel's to use: the engine's count instead.
+  expect(agentRowPrefix({ tokenCount: 20_000, contextWindowSize: 200_000 }, row('a', { steps: 2, contextTokens: 160_000, contextIsSum: true })))
+    .toBe('10% ctx · ')
+  // Before any step: the engine's token count against its window; its cost beats the row's.
+  expect(agentRowPrefix({ tokenCount: 20_000, contextWindowSize: 200_000, cost: { usd: 1.234 } }, row('a', { usd: 0.3 }))).toBe('10% ctx · $1.23 · ')
+  expect(agentRowPrefix({ tokenCount: 20_000, contextWindowSize: 200_000 })).toBe('10% ctx · ')
+  expect(agentRowPrefix({ cost: { usd: 0.001 } })).toBe('<$0.01 · ')
+  // Nothing known, nothing drawn; a zero count or cost says nothing.
+  expect(agentRowPrefix({})).toBe('')
+  expect(agentRowPrefix({ tokenCount: 0, contextWindowSize: 200_000, cost: { usd: 0 } })).toBe('')
+  expect(agentRowPrefix({ tokenCount: 5_000_000, contextWindowSize: 200_000 })).toBe('100% ctx · ')
+})
+
+test('ctxPercent: none before any reading (a teammate in its own pane), none from a summed reading; a real step restores it', async () => {
+  const session = { model: 'claude-opus-5-5', window: 200_000 }
+  expect(ctxPercent(row('a'), session)).toBe(null)
+  const summed = applyComplete([row('b', { turnId: 't1' })], 'b', 'answer', usage(80_000, 0, 80_000, 0), T0 + 1, 't0')
+  expect(summed[0]).toMatchObject({ contextTokens: 160_000, contextIsSum: true })
+  expect(ctxPercent(summed[0]!, session)).toBe(null)
+  const stepped = applyStep(summed, 'b', usage(50_000, 0, 0, 0), 'claude-opus-5-5', undefined, T0 + 2, 't9', T0 + 2)
+  expect('contextIsSum' in stepped[0]!).toBe(false)
+  expect(ctxPercent(stepped[0]!, session)).toBe(25)
+})
+
+test('reconcileRows: an explicit failed report is not turned into stopped by a later killed', async () => {
+  const failed = applyReport([row('a', { steps: 1 })], 'a', 'failed', T0 + 3)
+  expect(reconcileRows(failed, [{ id: 'a', status: 'killed' }], T0 + 9)[0]).toMatchObject({ status: 'failed', isReported: true })
+})
+
+test('isSummed: the 0.6.0 mark, or a row left by 0.5.0 whose current turn was counted by its fallback', async () => {
+  const session = { model: 'claude-opus-5-5', window: 200_000 }
+  const legacy = row('a', { steps: 2, contextTokens: 160_000, turnId: 't1', turns: { t1: -1 } })
+  expect(isSummed(legacy)).toBe(true)
+  expect(ctxPercent(legacy, session)).toBe(null)
+  expect(agentRowPrefix({ tokenCount: 20_000, contextWindowSize: 200_000 }, legacy)).toBe('10% ctx · ')
+  expect(isSummed(row('b', { steps: 1, contextTokens: 50_000, turnId: 't1', turns: { t1: 1 } }))).toBe(false)
+})
+
+test('reconcileRows: killed corrects a row its completion marked failed, keeping its end; done stays done', async () => {
+  const out = reconcileRows(
+    [row('a', { status: 'failed', endedAt: T0 + 3, steps: 1 }), row('b', { status: 'done', endedAt: T0 + 3 })],
+    [{ id: 'a', status: 'killed' }, { id: 'b', status: 'killed' }],
+    T0 + 9,
+  )
+  expect(out[0]).toMatchObject({ status: 'stopped', endedAt: T0 + 3 })
+  expect(out[1]).toMatchObject({ status: 'done', endedAt: T0 + 3 })
+})
+
+test('applyComplete: a resumed run that ends with an error in a new turn is failed at its own end, not the old stop', async () => {
+  // Stopped by the list's killed (no report): a completion of a turn the row has not seen is the next run's.
+  const killed = [row('a', { steps: 1, turnId: 't1', turns: { t1: 1 }, status: 'stopped', endedAt: T0 + 2 })]
+  expect(applyComplete(killed, 'a', 'aborted', null, T0 + 50, 't2')[0]).toMatchObject({ status: 'failed', endedAt: T0 + 50 })
+  // Turns seen but no current turn id (a row from an older version): an unseen turn is still the next run's.
+  const legacy = [row('c', { steps: 1, turns: { t1: 1 }, status: 'stopped', endedAt: T0 + 2 })]
+  expect(applyComplete(legacy, 'c', 'aborted', null, T0 + 50, 't2')[0]).toMatchObject({ status: 'failed', endedAt: T0 + 50 })
+  // A resumed run (its report mark cleared by the resume) that reports its own stop before
+  // any step keeps it through its aborted completion, whatever turn that names.
+  const resumed = reopenRow({ ...killed[0]!, isReported: true }, T0 + 30)
+  expect('isReported' in resumed).toBe(false)
+  const reported = applyReport([resumed], 'a', 'stopped', T0 + 40)
+  expect(applyComplete(reported, 'a', 'aborted', null, T0 + 41, 't2')[0]).toMatchObject({ status: 'stopped', endedAt: T0 + 40 })
+  // A stopped run that never stepped keeps its stop through its own completion.
+  const early = applyReport([row('b')], 'b', 'stopped', T0 + 2)
+  expect(applyComplete(early, 'b', 'aborted', null, T0 + 4, 't1')[0]).toMatchObject({ status: 'stopped', endedAt: T0 + 2 })
+  // Stopped by the list (no report) before it ever stepped: its completion is still its own.
+  const listed = [row('d', { status: 'stopped', endedAt: T0 + 2 })]
+  expect(applyComplete(listed, 'd', 'aborted', null, T0 + 4, 't1')[0]).toMatchObject({ status: 'stopped', endedAt: T0 + 2 })
+})
+
+test('fmtUsd: cents, and under a cent but not nothing', async () => {
+  expect(fmtUsd(0)).toBe('$0.00')
+  expect(fmtUsd(0.004)).toBe('<$0.01')
+  expect(fmtUsd(0.005)).toBe('$0.01')
+  expect(fmtUsd(12.345)).toBe('$12.35')
 })
 
 test('ctxPercent: only against the session window of the same model, capped at 100', async () => {
@@ -301,7 +450,7 @@ test('costumeOf: an agent of no type of its own rotates through the Clawd costum
   expect(costumeOf('general-purpose')).toBe('plain')
 })
 
-test('reconcile keeps the engine\'s waiting, idle and pending states on a running row, and clears them', async () => {
+test("reconcile keeps the engine\'s waiting, idle and pending states on a running row, and clears them", async () => {
   const list = [row('a'), row('b'), row('c')]
   const waiting = reconcileRows(list, [{ id: 'a', status: 'waiting' }, { id: 'b', status: 'idle' }, { id: 'c', status: 'pending' }], T0 + 1)
   expect(waiting.map(a => a.status)).toEqual(['running', 'running', 'running'])

@@ -21,7 +21,7 @@ In the terminal the same row is text:
   desktop, header tiles for agents, tokens and time (the terminal shows one dim
   line, `3 agents · 612k · 4:40`, beside the `Collapse` button); `Running · N`
   above the live cards; one card per subagent with its description, type, model
-  and effort, context fill, tokens and elapsed time, and a status mark.
+  and effort, context fill, tokens, cost and elapsed time, and a status mark.
   `Collapse` shrinks it to one sprite per agent on desktop (up to six, then
   `+n`, then the totals) or one coloured status mark per agent in the
   terminal; the `▾ Finished · N` fold (`▸` when shut) hides finished cards
@@ -42,12 +42,13 @@ Every costume, by the agent type that wears it:
 | Part | Meaning |
 |---|---|
 | Clawd costume | the agent's type: Explore is a pirate, Plan an engineer, claude-code-guide a chef; every other subagent takes the costume its spawn number points at, counting every subagent of the session including those three (plain, pirate, detective, engineer, chef, then round again), so a session shows them all; any Codex agent or run (a `codex:` type or `codex-rescue`, `/codex:review`, `codex exec`) is not a Clawd but the blue Codex bot, whose screen cursor blinks while it runs; a Bash-launched Kimi run (`buddy:kimi…`) is a panda, a Gemini one a rainbow droplet whose colors sweep while it runs, a Grok one (or `cursor-grok`) a ball (black on light, white on dark), a Composer one a grey cube with a raised fist, a DeepSeek one a blue whale that rocks and flicks its fluke; each walks while its agent runs. Sprites are desktop only: a terminal card has a coloured status mark, the description, a dim `type · model · effort` line, then a bar and the stats |
-| `ctx 41% · 82k` | the agent's context after its latest request: input plus cache read plus cache write. The percent is against the session model's window and shows only when the agent runs that model; another model's window is not guessed |
+| `ctx 41% · 82k` | the agent's context after its latest request: input plus cache read plus cache write. The percent is against the window of the model the agent runs, as Claude Code's agent list reports it (2.1.326 and later); on an older build, or before the list has been read, it is against the session model's window and shows only when the agent runs that model |
 | `196k` | every request's four token counts, summed |
+| `$0.42` | what `/cost` credited the agent's requests, from Claude Code's agent list: an estimate, not the bill; `<$0.01` under a cent. Absent where the engine keeps no cost for the agent (a Bash-launched run) |
 | `0:19` | elapsed since the spawn, to the end for a finished agent; `h:mm:ss` past an hour |
 | `· waiting` `· cut off` `· 2 asked` `· 1 denied` `· awaiting approval` | after the stats when they apply: the engine's waiting/idle/pending state, an answer stopped at the output limit, permission checks asked or denied, and a call waiting on approval |
 | context bar | desktop: the costume's colour, green and full when done; terminal: 6–20 cells of `█` on `░`, magenta, green and full when done |
-| `●` `✓` `✗` `○` | running (magenta), finished (green), failed (red: an error, an interruption, a refusal, or killed), lost (grey) |
+| `●` `✓` `✗` `■` `○` | running (magenta), finished (green), failed (red: an error or a refusal), stopped (yellow on the terminal, a grey square on desktop: the run was stopped, as the engine's report or its agent list says), lost (grey) |
 | `— · —` | a `lost` agent: it vanished from the engine's agent list without ever reporting a request (a remote run, or one that never started); nothing is known about its tokens |
 
 ## Agents started by Bash
@@ -89,9 +90,16 @@ clock, and every running row's time sat at `0:00`. The clock now starts first
 and the command is registered under `/agents-panel`, guarded. A session started
 before a change to this mod runs the old code until it restarts.
 
-**No dollars.** Claude Code gives mods no per-model price, so the pane shows
-tokens and context, never a guessed cost. The session's own cost is on the
-usage-hp row.
+**Cost is the engine's.** Each card's dollars are what Claude Code's own
+`/cost` credited that agent, read from its agent list; the mod prices nothing
+itself. The session's total is on the usage-hp row.
+
+**The engine's own agent rows.** Claude Code's at-a-glance agent list (the
+terminal's rows under the prompt, the desktop's Background tasks, VS Code's
+subagents) shows each agent's context fill and cost in front of its words,
+`25% ctx · $0.30 · Reading files`, so they show with the pane closed. Only the
+row's words change; the engine keeps drawing, opening and stopping the row.
+Turn it off with `agentRows`.
 
 **Running means the engine says so.** An agent the engine lists as `pending`,
 `waiting` or `idle` counts as running. A running agent that disappears from the
@@ -106,6 +114,10 @@ subagent, Bash-launched agent or Codex run starts; off, `/agents-panel` and the
 band's `×n` button open it. Set it in `/config` under agents-panel, or in `settings.json`:
 
     { "pluginConfigs": { "agents-panel": { "options": { "autoOpen": false } } } }
+
+`agentRows` (default on): put each agent's context fill and cost in front of
+the words on Claude Code's own agent rows; off, those rows stay as the engine
+draws them.
 
 Install instructions are in the mods README one folder up.
 
@@ -138,3 +150,8 @@ at another copy of the mod).
 - **A late step is not a resume.** A step on a finished card reopens it only when it belongs to a turn the card has not seen and began after the card ended. A step already in flight when the engine's list ended the run, or a delayed step of an older turn, only adds figures.
 - **Reloading keeps the count.** A card left by 0.4.0 carries its turn's step count and its fallback turn into the new per-turn counts the first time an event rewrites it, so a reload never counts a step twice.
 
+## 0.6.0 (2026-11-23)
+
+- **Each agent's own figures.** The agent list (Claude Code 2.1.326 and later) gives every subagent's model, effort, context window and cost; the reconcile reads them onto the card. A subagent on another model than the session now gets a context percent against its own window, and every card shows its cost.
+- **Context and cost on the engine's rows.** Claude Code's own agent rows get `NN% ctx · $X.XX ·` in front of their words (`agentRows`, default on).
+- **Stopped is not failed.** A run the person stopped (the engine's report says `stopped`, or its agent list says `killed`) shows as stopped. A stopped run's completion, which reads as an error, does not turn it into failed; the report settles a card its completion marked, keeps its end time and never reopens it.

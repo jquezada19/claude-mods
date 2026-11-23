@@ -1,8 +1,8 @@
 import type { EngineInterface, Register } from 'claude-code'
 
 import type { AgentRun, EarlyStep, Panel, Session } from '../types'
-import { RECONCILE_MS, applyComplete, applyStep, ctxPercent, applyAnswer, applyCallDone, applyCheck, applyStepDetail, finishRow, noteTurn, openRow, reconcileRows, reopenRow, sumUsage, taskOf, toolLine, totals } from './agents'
-import type { Usage } from './agents'
+import { RECONCILE_MS, agentRowPrefix, applyComplete, applyReport, applyStep, ctxPercent, applyAnswer, applyCallDone, applyCheck, applyStepDetail, finishRow, noteTurn, openRow, reconcileRows, reopenRow, sumUsage, taskOf, toolLine, totals } from './agents'
+import type { ListedAgent, Usage } from './agents'
 import { BAND_H, CARD_H, STRIP_H, bandSvg, bandText, cardAlt, cardMeta, cardStats, cardSvg, headerSvg, headerText, stripSvg } from './draw'
 import { LAUNCH_GRACE_MS, doneStatus, parseLaunches, parseNotifications } from './launches'
 
@@ -90,6 +90,7 @@ const stepOrKeep = (
     const kept: Record<string, EarlyStep> = Object.fromEntries(others.map(k => [k, early[k]!]))
     kept[id] = {
       ...(prev?.ended === undefined ? {} : { ended: prev.ended }),
+      ...(prev?.reported === undefined ? {} : { reported: prev.reported }),
       tokens: (prev?.tokens ?? 0) + (sum?.tokens ?? 0),
       context: sum?.context ?? prev?.context ?? 0,
       steps: (prev?.steps ?? 0) + (sum === null ? 0 : 1),
@@ -144,15 +145,23 @@ const openSpawn = ($: EngineInterface, run: AgentRun): Promise<void> => {
       }
       const opened = openRow(list, card)
       const end = kept?.ended
+      const ended =
+        end === undefined
+          ? opened
+          : applyAnswer(applyComplete(opened, run.id, end.reason, end.usage, end.at, end.turnId), run.id, end.answer ?? '')
+      const report = kept?.reported
 
-      return end === undefined
-        ? opened
-        : applyAnswer(applyComplete(opened, run.id, end.reason, end.usage, end.at, end.turnId), run.id, end.answer ?? '')
+      return report === undefined ? ended : applyReport(ended, run.id, report.status, report.at)
     })
 
     if (kept !== undefined) {
       const { [run.id]: _folded, ...rest } = early
       await $.state.set(EARLY, rest)
+    }
+
+    // It opened already over: the reconcile that would read its final figures may have run first.
+    if (kept?.ended !== undefined || kept?.reported !== undefined) {
+      settleSoon($)
     }
   })
   chain = go.catch(() => undefined)
@@ -220,6 +229,88 @@ const completeOrKeep = (
   chain = go.catch(() => undefined)
 
   return go
+}
+
+/**
+ * How the engine reported a subagent's run ended, on the row chain: applied to its row,
+ * or held with what else came early when the row is not there yet, for the spawn to apply.
+ */
+const reportOrKeep = ($: EngineInterface, id: string, status: 'completed' | 'failed' | 'stopped', at: number): Promise<void> => {
+  const go = chain.then(async () => {
+    const { value: list = [] } = await $.state.get(AGENTS)
+
+    if (list.some(a => a.id === id)) {
+      await edit($, l => applyReport(l, id, status, at))
+
+      return
+    }
+
+    // A card /clear took away: its report is the earlier conversation's, not a card to come.
+    if (clearedIds.has(id)) {
+      return
+    }
+
+    const { value: early = {} } = await $.state.get(EARLY)
+    const prev = early[id] ?? { tokens: 0, context: 0, steps: 0, model: '' }
+    const others = Object.keys(early).filter(k => k !== id).slice(-(EARLY_CAP - 1))
+    const kept: Record<string, EarlyStep> = Object.fromEntries(others.map(k => [k, early[k]!]))
+    kept[id] = { ...prev, reported: { status, at } }
+    await $.state.set(EARLY, kept)
+  })
+  chain = go.catch(() => undefined)
+
+  return go
+}
+
+/** How long after a subagent ends the list is read once more, for its final figures (its cost). */
+const SETTLE_MS = 3_000
+/**
+ * The ids /clear or /resume took finished cards away for. A report of one of them that
+ * arrives afterwards belongs to the earlier conversation: it is dropped, not held for a
+ * card, so a later run under the same id never opens closed by it. A card under such an id
+ * takes its report directly, so only a report that beats its card is dropped.
+ */
+const clearedIds = new Set<string>()
+
+/** One settle read pending at a time; an end while one waits asks for one more after it. */
+let settleArmed = false
+let settleAgain = false
+let settleEpoch = 0
+
+/**
+ * After a subagent ends, one forced reconcile a moment later: the tick stops once nothing
+ * runs, so the last agent of a turn that ends while the main loop is idle would otherwise
+ * keep the figures of its last tick. Ends that land together share one read; an end while
+ * a read waits gets a read of its own after it. /clear drops a pending read.
+ */
+const settleSoon = ($: EngineInterface): void => {
+  if (settleArmed) {
+    settleAgain = true
+
+    return
+  }
+
+  settleArmed = true
+  settleAgain = false
+  const epoch = settleEpoch
+
+  try {
+    $.clock.after(SETTLE_MS, () => {
+      if (epoch !== settleEpoch) {
+        return
+      }
+
+      settleArmed = false
+      void reconcile($, true).catch(() => undefined)
+
+      if (settleAgain) {
+        settleSoon($)
+      }
+    })
+  } catch {
+    // no timer: the next end tries again rather than finding a read that never comes
+    settleArmed = false
+  }
 }
 
 /** Panel edits (presses, toggles, resets) apply one at a time, so two presses never drop one. */
@@ -295,7 +386,7 @@ export const reconcile = async ($: EngineInterface, force: boolean): Promise<voi
 
   await settleExternal($, at)
 
-  let infos: readonly { id: string; status: string }[]
+  let infos: readonly ListedAgent[]
 
   try {
     infos = await $.agent.list()
@@ -386,6 +477,12 @@ export const register: Register = (on, options) => {
   // itself again for the new conversation's first subagent.
   on('session.end', async ($, e, next) => {
     if (e.reason === 'clear' || e.reason === 'resume') {
+      // A read armed for the old conversation is dropped; the new one arms its own.
+      settleEpoch += 1
+      settleArmed = false
+      settleAgain = false
+      const { value: before = [] } = await $.state.get(AGENTS)
+      before.filter(a => a.status !== 'running').forEach(a => clearedIds.add(a.id))
       await queue($, list => (list.every(a => a.status === 'running') ? list : list.filter(a => a.status === 'running')))
       await editPanel($, p => ({ ...p, hasAutoOpened: false, open: [] }))
       await $.state.set(EARLY, {})
@@ -695,12 +792,51 @@ export const register: Register = (on, options) => {
       const at = await $.clock.now()
       const usage = e.usage ?? null
       await completeOrKeep($, id, e.reason, usage, at, e.turnId, e.answer)
+      settleSoon($)
     } else {
       await reconcile($, true)
     }
 
     return next(e)
   })
+
+  // How the engine says a subagent's run ended: a stopped run is shown as stopped, not
+  // failed. Observes only: the report the parent reads is the one beneath, untouched.
+  // Applied before the report goes on: the parent learns of the end only through it, so a
+  // resume of the same agent cannot land first and be closed by this run's report.
+  on('agent.report', async ($, e, next) => {
+    try {
+      const at = await $.clock.now()
+      await reportOrKeep($, e.agentId, e.status, at)
+      settleSoon($)
+    } catch {
+      // the card keeps what its completion said
+    }
+
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The engine's own agent rows (the terminal's list under the prompt, the desktop's
+  // Background tasks, VS Code's subagents) get the agent's context fill and cost in
+  // front of their words, so they show with the pane closed. Only `label` changes.
+  on('ui.render', { component: 'AgentRow' }, async ($, e, next) => {
+    if (options.agentRows === false) {
+      return next(e)
+    }
+
+    const { value: list = [] } = await $.state.get(AGENTS)
+    const prefix = agentRowPrefix(e.props, list.find(a => a.id === e.props.id))
+
+    if (prefix === '') {
+      return next(e)
+    }
+
+    // An empty label (no progress yet, no description) takes the figures alone, no dangling separator.
+    const words = e.props.label.trim()
+    const label = words === '' ? prefix.replace(/ · $/, '') : `${prefix}${e.props.label}`
+
+    return next({ ...e, props: { ...e.props, label } })
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: COMMAND }, async $ => {
     try {
@@ -818,9 +954,17 @@ export const register: Register = (on, options) => {
 
     const cols = Math.max(24, e.props.bodyColumns || 40)
     const barW = Math.max(6, Math.min(20, cols - 34))
-    const GLYPH: Record<AgentRun['status'], string> = { running: '●', done: '✓', failed: '✗', lost: '○' }
-    const colorOf = (a: AgentRun): 'red' | 'green' | 'gray' | 'magenta' =>
-      a.status === 'failed' ? 'red' : a.status === 'done' ? 'green' : a.status === 'lost' ? 'gray' : 'magenta'
+    const GLYPH: Record<AgentRun['status'], string> = { running: '●', done: '✓', failed: '✗', stopped: '■', lost: '○' }
+    const colorOf = (a: AgentRun): 'red' | 'green' | 'gray' | 'yellow' | 'magenta' =>
+      a.status === 'failed'
+        ? 'red'
+        : a.status === 'done'
+          ? 'green'
+          : a.status === 'stopped'
+            ? 'yellow'
+            : a.status === 'lost'
+              ? 'gray'
+              : 'magenta'
     const row = (a: AgentRun) => {
       const pct = a.status === 'lost' ? null : ctxPercent(a, session)
       const fillPct = a.status === 'done' ? 100 : (pct ?? 0)

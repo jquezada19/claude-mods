@@ -1,13 +1,19 @@
 {
   "name": "agents-panel",
-  "version": "0.5.0",
-  "description": "Band row and Agents pane showing every subagent of the session: type, model, context fill, tokens, elapsed and status",
+  "version": "0.6.0",
+  "description": "Band row and Agents pane showing every subagent of the session: type, model, context fill, tokens, cost, elapsed and status; the engine's own agent rows get context fill and cost too",
   "types": "./types/index.d.ts",
   "userConfig": {
     "autoOpen": {
       "type": "boolean",
       "title": "Open the Agents pane on the first agent",
       "description": "Once per session, the pane opens itself when the first subagent, Bash-launched agent or Codex run starts; off, /agents-panel and the band's ×n button open it",
+      "default": true
+    },
+    "agentRows": {
+      "type": "boolean",
+      "title": "Context and cost on the built-in agent rows",
+      "description": "Puts each agent's context fill and cost in front of the words on Claude Code's own agent rows (the terminal's list under the prompt, the desktop's Background tasks); off, those rows stay as the engine draws them",
       "default": true
     }
   }
