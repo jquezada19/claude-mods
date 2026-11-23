@@ -42,7 +42,7 @@ Compact now, then send (the prompt goes back in the box and compaction runs;
 press Enter once the row shows the smaller context) / Cancel. A dismissed
 dialog sends as typed. The row hides while a survey shows.
 
-It stacks with other mods that draw in the same band (such as usage-hp) in `CLAUDE_CODE_PLUGIN_DIRS` order: the first mod listed draws at the bottom, the last at the top.
+It stacks with other mods that draw in the same band (such as usage-hp) in `CLAUDE_CODE_PLUGIN_DIRS` order: on Claude Code 2.1.323 and later the first mod listed draws at the top.
 
 ## Install
 
@@ -64,7 +64,7 @@ Requires a Claude Code version with mods: the docs say v2.1.287 or later; seen w
 
 ## 0.6.0 (2026-10-16)
 
-- **The lifetime is grounded, not guessed.** The hit-rate inference that flipped the countdown to 5m is gone: on 2026-10-16 every observed main-conversation cache write over a week was 1h, and the 13 restarts the mod had logged at an inferred 5m were prefix misses inside a 1h lifetime. The row reads the engine's `cache_ttl` after a main-conversation model switch (kept in session state with the model switched to, applied only to that model's responses, forgotten on `/clear` and `/resume`, a subagent's switch ignored), then your configuration in the documented order, else shows `1h (assumed)`. A cache write's own 1h/5m split is used when the step usage carries it; on 2.1.300 it does not (only the four totals reach a mod), so that source waits on the engine.
+- **The lifetime is grounded, not guessed.** The hit-rate inference that flipped the countdown to 5m is gone: on 2026-10-16 every observed main-conversation cache write over a week was 1h, and the 13 restarts the mod had logged at an inferred 5m were prefix misses inside a 1h lifetime. The row reads the engine's `cache_ttl` after a main-conversation model switch (kept in session state with the model switched to, applied only to that model's responses, forgotten on `/clear` and `/resume`, a subagent's switch ignored), then your configuration in the documented order, else shows `1h (assumed)`. A cache write's own 1h/5m split is used when the step usage carries it: on 2.1.330 it does, as `ephemeral_5m_input_tokens` and `ephemeral_1h_input_tokens` on the step's usage.
 - **Misses are not cold restarts.** A big re-write is judged by the lifetime the earlier cache had: at or past it, or after a resume the engine called expired, it is a cold restart; inside a known (not assumed) lifetime it is a miss (`· 1 miss`), something changed the prefix; inside an assumed one it is not counted. Each logged row now carries `kind` (`lapse`/`miss`), `ttl_basis` and `split_seen`.
 - **A resume the engine calls expired** reads `expired while away`, and the cold-send guard asks before a big send, without inventing a 5m lifetime. The next response or a compaction clears it.
 - `tests/mutate.py` (this mod's; each mod has its own) runs a clean baseline first and counts a mutant as detected only when the module still loaded.

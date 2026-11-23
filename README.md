@@ -186,7 +186,7 @@ macOS or Linux (paths separated by `:`):
 
     {
       "env": {
-        "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/ticket-phase:~/.claude/mods/usage-hp:~/.claude/mods/cache-status:~/.claude/mods/agents-panel:~/.claude/mods/repo-diffs"
+        "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/agents-panel:~/.claude/mods/cache-status:~/.claude/mods/usage-hp:~/.claude/mods/ticket-phase:~/.claude/mods/repo-diffs"
       }
     }
 
@@ -194,12 +194,14 @@ Windows (paths separated by `;`, forward slashes):
 
     {
       "env": {
-        "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/ticket-phase;~/.claude/mods/usage-hp;~/.claude/mods/cache-status;~/.claude/mods/agents-panel;~/.claude/mods/repo-diffs"
+        "CLAUDE_CODE_PLUGIN_DIRS": "~/.claude/mods/agents-panel;~/.claude/mods/cache-status;~/.claude/mods/usage-hp;~/.claude/mods/ticket-phase;~/.claude/mods/repo-diffs"
       }
     }
 
 Each path must be absolute or start with `~`. Each mod draws its own row, and
-Claude Code stacks the rows in the order the mods load. To install only one mod, list
+Claude Code stacks the rows top to bottom in the order listed (2.1.323 and
+later; older builds stacked them the other way up). The lines above list them
+for the band shown at the top of this page. To install only one mod, list
 only its path. Mind the commas: a line that is not the last in its block ends
 with one.
 

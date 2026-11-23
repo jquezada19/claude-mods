@@ -345,7 +345,7 @@ this `usage-hp` folder, not at the repository root, so a marketplace added from
 the repository root will not find it.
 
 It stacks with other mods that draw in the same band, in `CLAUDE_CODE_PLUGIN_DIRS`
-order: the first mod listed draws at the bottom of the band, the last at the top.
+order: on Claude Code 2.1.323 and later the first mod listed draws at the top.
 
 ## The ledger and the resync log
 
