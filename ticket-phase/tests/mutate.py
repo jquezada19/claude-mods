@@ -54,7 +54,7 @@ MUTANTS = [
      "    } else {\n      text = await $.fs.read(sink)\n    }",
      "    } else {\n      text = await $.fs.read(sink)\n      sinkMtimeMs = (await $.fs.stat(sink)).mtimeMs\n    }"),
     ("tally-ignores-order", REGISTER, "stored.enteredOrder === state.enteredOrder", "true"),
-    ("note-cache-by-substring", REGISTER, "let path = cached !== null && matches(base, ticket) ? cached : null", "let path = cached !== null && cached.includes(`/${ticket} - `) ? cached : null"),
+    ("note-cache-by-substring", REGISTER, "&& matches(base, ticket) ? cached : null", "&& cached.includes(`/${ticket} - `) ? cached : null"),
     ("late-note-ignored", REGISTER, "const found = (await findNote($, vault, reading.ticket)) !== null", "const found = false"),
     ("alt-not-text", REGISTER, "<Svg source={source} alt={text} width={W} height={ROW_H} />", "<Svg source={source} alt={title} width={W} height={ROW_H} />"),
     ("segments-swapped", ROW, "if (cell !== '◆') {", "if (cell !== '◇') {"),

@@ -149,10 +149,13 @@ const midnightOf = (day: string): number =>
  * page (platform.claude.com/docs/en/about-claude/pricing, 2026-10-13):
  * input, output, cache read, and a 1-hour cache write (the TTL Claude Code
  * writes). First match wins, so a longer id comes before its prefix.
+ * Fable 5.2 from the Claude Code 2.1.321 release notes ($8/$40, $0.20 reads);
+ * its 1-hour write is taken at 2x input like every other row.
  */
 type Price = { input: number; output: number; read: number; write: number }
 
 const PRICES: readonly (readonly [string, Price, Price?])[] = [
+  ['fable-5-2', { input: 8, output: 40, read: 0.2, write: 16 }],
   ['fable-5-1', { input: 10, output: 50, read: 0.25, write: 20 }],
   ['mythos-5-1', { input: 10, output: 50, read: 0.25, write: 20 }],
   ['fable-5', { input: 10, output: 50, read: 1, write: 20 }],
@@ -182,7 +185,16 @@ const ENGINE_PRICES: readonly (readonly [string, Price, Price?])[] = PRICES.map(
   row[0] === 'sonnet-5-5' ? ([row[0], { ...row[1], read: 0.2 }] as const) : row,
 )
 
-/** What one call cost at the official prices, or null for a model not listed. */
+/** A 5-minute cache write costs 1.25x input; the table's `write` is the 1-hour rate. */
+const FIVE_MIN_WRITE = 1.25
+
+/**
+ * What one call cost at the official prices, or null for a model not listed.
+ *
+ * Where the usage splits its cache writes by lifetime (Claude Code 2.1.330's
+ * TurnUsage), the 5-minute part and any unsplit rest pay the 5-minute rate, as
+ * `/cost` prices them; with no split every write pays the 1-hour rate.
+ */
 const priceOf = (
   usage: {
     model: string
@@ -190,6 +202,10 @@ const priceOf = (
     output_tokens: number
     cache_read_input_tokens: number
     cache_creation_input_tokens: number
+    ephemeral_5m_input_tokens?: number
+    ephemeral_1h_input_tokens?: number
+    /** The API's nested form of the same split, passed through by older builds. */
+    cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number } | null
   },
   table: readonly (readonly [string, Price, Price?])[] = PRICES,
 ): number | null => {
@@ -203,11 +219,20 @@ const priceOf = (
     usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens
   const rate = prompt > 100_000 && found[2] !== undefined ? found[2] : found[1]
 
+  const isSplit = (p: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number } | null | undefined) =>
+    p != null && (typeof p.ephemeral_5m_input_tokens === 'number' || typeof p.ephemeral_1h_input_tokens === 'number')
+  const split = isSplit(usage) ? usage : isSplit(usage.cache_creation) ? usage.cache_creation! : null
+  const hasSplit = split !== null
+  const oneHour = hasSplit ? Math.min(split.ephemeral_1h_input_tokens ?? 0, usage.cache_creation_input_tokens) : 0
+  const writes = hasSplit
+    ? oneHour * rate.write + (usage.cache_creation_input_tokens - oneHour) * rate.input * FIVE_MIN_WRITE
+    : usage.cache_creation_input_tokens * rate.write
+
   return (
     (usage.input_tokens * rate.input +
       usage.output_tokens * rate.output +
       usage.cache_read_input_tokens * rate.read +
-      usage.cache_creation_input_tokens * rate.write) /
+      writes) /
     1_000_000
   )
 }
@@ -1399,13 +1424,12 @@ export const register: Register = on => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Whatever another mod draws in the band stays, above this one's rows.
-    const beneath = await next(e)
-
+    // The band asks each plugin for its own row (Claude Code 2.1.323+) and stacks
+    // the rows itself (AbovePromptList), so this hook draws only this mod's rows.
     const { value: isHidden = false } = await $.state.get(HIDDEN)
 
     if (e.props.hasSurvey || isHidden) {
-      return beneath
+      return next(e)
     }
 
     const { value: isMetered = false } = await $.state.get(METERED)
@@ -1567,10 +1591,15 @@ export const register: Register = on => {
         ? ` · re-sync: /hp <spent> ${dollars(budget.limitUsd)}`
         : ''
 
+    // A metered seat with no /hp limit and no window has nothing to show: pass,
+    // rather than hand the band an empty row.
+    if (bars.length === 0 && isMetered && budget === null) {
+      return next(e)
+    }
+
     return (
       <Box flexDirection="column">
-        {beneath}
-        {bars.length === 0 && !(isMetered && budget === null) && (
+        {bars.length === 0 && (
           <Box>
             <Text color="magenta" bold>
               ♥ HP

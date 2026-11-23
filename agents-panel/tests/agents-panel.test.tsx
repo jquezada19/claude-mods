@@ -39,6 +39,8 @@ const world = (on: On, now = T0) => {
     usageFails: false,
     window: 200_000,
     opens: [] as string[],
+    /** The surface refuses to open a pane. */
+    openFails: false,
     panes: new Set<string>(),
     spawnAnswer: (e: { subagentType: string }) => ({ model: 'claude-opus-5-5', agentId: `id-${e.subagentType}` }) as Record<string, unknown>,
     spawnCalls: 0,
@@ -101,6 +103,10 @@ const world = (on: On, now = T0) => {
     return it.spawnAnswer(e as never) as never
   })
   on('ui.open', (_, e) => {
+    if (it.openFails) {
+      throw new Error('no pane on this surface')
+    }
+
     it.opens.push(e.id)
     it.panes.add(e.id)
 
@@ -467,6 +473,17 @@ test('a check that comes before the card is held and lands on it', async ($, on)
   expect(a).toMatchObject({ checks: { asked: 1, denied: 0 }, pending: ['c1'] })
 })
 
+test('a held check survives a usage step that also comes before the card', async ($, on) => {
+  const it = world(on)
+  on('tool.check', () => ({ decision: 'deny' }) as never)
+  await $.session.start({ cwd: '/t' } as never)
+  await $.tool.check({ tool: 'Bash', input: { command: 'rm x' }, tool_use_id: 'c1', agentId: 'id-a' } as never)
+  await step($, it, u(1_000), 'id-a')
+  await spawn($, 'a')
+  const [a] = await rows(it)
+  expect(a!.checks).toEqual({ asked: 0, denied: 1 })
+})
+
 test('a step that reports no usage still clears a pending ask', async ($, on) => {
   const it = world(on)
   on('tool.check', () => ({ decision: 'ask' }) as never)
@@ -704,9 +721,10 @@ for (const surface of SURFACES) {
     await p.done()
   })
 
-  test(`${surface}: the band is beneath alone with nothing running, and beneath plus the row while an agent runs`, async ($, on) => {
+  test(`${surface}: the band passes with nothing running, and adds this mod's row while an agent runs`, async ($, on) => {
     const it = world(on)
-    // Something beneath: one Text row from a lower plugin.
+    // Another row in the band: passed on whole when there is nothing to show; the
+    // band stacks this mod's row beside it (2.1.323+), whatever the order.
     it.beneath = 'BENEATH'
     await $.session.start({ cwd: '/t' } as never)
     let b = await band($, surface)
@@ -723,7 +741,7 @@ for (const surface of SURFACES) {
     await step($, it, u(400_000), 'id-Explore')
     await it.clock.advance(134 * SECOND)
     b = await band($, surface)
-    expect(b.texts.startsWith('BENEATH')).toBe(true)
+    expect(b.texts).toContain('BENEATH')
     const text = '2 running · 400k · 2:14'
     if (surface === 'desktop') {
       expect(b.svgs.length).toBe(1)
@@ -935,6 +953,16 @@ test('launch: a foreground buddy call is a row for its length; an error fails it
   await bash($, 'git status', { tool_use_id: 'tu-3' })
   expect((await rows(it)).length).toBe(2)
   expect(sh.calls).toBe(3)
+})
+
+test('launch: a pane that fails to open still lets the call end its row', async ($, on) => {
+  const it = world(on)
+  shell(on)
+  it.openFails = true
+  await $.session.start({ cwd: '/t' } as never)
+  await bash($, `${RUN} kimi-k3-high /tmp/p 300`)
+  const [a] = await rows(it)
+  expect(a).toMatchObject({ id: 'tu-bash:0', status: 'done', endedAt: T0 })
 })
 
 test('launch: a backgrounded seat runs until its meta file lands, or is lost past its deadline', async ($, on) => {

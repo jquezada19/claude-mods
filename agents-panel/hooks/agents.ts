@@ -1,4 +1,4 @@
-import type { AgentRun, Session } from '../types'
+import type { AgentDetail, AgentRun, Session } from '../types'
 import type { Costume } from './sprite'
 
 export const ROW_CAP = 200
@@ -466,7 +466,7 @@ export const applyStepDetail = (
   // A step means the agent is working: whatever it waited on was answered.
   const a = settled(list[i]!)
   const tools = [...(a.detail?.tools ?? []), ...uses.map(toolLine)].slice(-TOOLS_KEPT)
-  const detail = { ...a.detail, tools, ...(stopReason === 'max_tokens' ? { isCutOff: true } : {}) }
+  const detail: AgentDetail = { ...a.detail, tools, ...(stopReason === 'max_tokens' ? { isCutOff: true as const } : {}) }
 
   return replaceAt(list, i, { ...a, detail })
 }

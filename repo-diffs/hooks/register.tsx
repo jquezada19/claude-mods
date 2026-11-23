@@ -986,7 +986,7 @@ function refreshSoon($: EngineInterface) {
   bashTimer?.cancel()
   bashTimer = $.clock.after(BASH_DEBOUNCE_MS, () => {
     bashTimer = null
-    void refresh($)
+    void refresh($).catch(() => undefined)
   })
 }
 
@@ -1276,19 +1276,29 @@ async function addComment($: EngineInterface, body: string) {
 
 // v / "[ ] viewed": mark the selected file viewed and move to the next unviewed
 // one, as GitHub folds a viewed file and the reviewer scrolls on; again unmarks.
+// The shared copy of the marks, written one at a time from the state as it stands
+// at the write, so a slower write never lands an older map over a newer one.
+let persisting: Promise<void> = Promise.resolve()
+function persistViewed($: EngineInterface) {
+  persisting = persisting
+    .then(async () => {
+      await $.store.set('viewed', await read($, viewed))
+    })
+    .catch(() => undefined)
+}
+
 async function toggleViewed($: EngineInterface, key: string) {
   const s = (await read($, snapshot)).find(x => key.startsWith(`${x.root}\u0000`))
   const f = s?.files.find(x => keyOf(s.root, x.path) === key)
   if (!s || !f) return
   const marks = await read($, viewed)
   const isOn = marks[key] === stampOf(f)
-  const next = { ...marks }
-  if (isOn) delete next[key]
-  else {
+  let stamp: string | undefined
+  if (!isOn) {
     // the content id the listing read (the selected file's), or read now for a file
     // marked from another container; the next listing compares against it
     const id = f.blob ?? (f.status === 'D' ? undefined : (await contentIds($, s.root, s.range, [f.path])).get(f.path))
-    next[key] = stampOf(id ? { ...f, blob: id } : f)
+    stamp = stampOf(id ? { ...f, blob: id } : f)
     // a freshly read id goes on the listing on screen, unless that listing moved meanwhile
     if (id && !f.blob) {
       await update($, snapshot, snaps =>
@@ -1300,18 +1310,29 @@ async function toggleViewed($: EngineInterface, key: string) {
       )
     }
   }
-  await update($, viewed, () => next)
+  // Decided against the marks as they stand when written, so two presses at once
+  // land as two toggles and marks on two files both survive.
+  let after: Record<string, string> = {}
+  let isUnmarked = isOn
+  await update($, viewed, cur => {
+    const next = { ...(cur ?? {}) }
+    isUnmarked = next[key] !== undefined && (next[key] === stampOf(f) || next[key] === stamp)
+    if (isUnmarked) delete next[key]
+    else next[key] = stamp ?? stampOf(f)
+    after = next
+    return next
+  })
   await update($, openViewed, list => (list ?? []).filter(k => k !== key))
-  await $.store.set('viewed', next).catch(() => undefined)
+  persistViewed($)
   // marked from another file's container: the selection stays where it is
-  if (isOn || key !== (await read($, view)).selected) {
+  if (isUnmarked || key !== (await read($, view)).selected) {
     await loadRest($, false)
     return
   }
   const order = fileOrder(buildTree(shownFiles(s, await activeExclude($))))
   const at = order.findIndex(x => keyOf(s.root, x.path) === key)
   const rest = [...order.slice(at + 1), ...order.slice(0, Math.max(0, at))]
-  const unviewed = rest.find(x => next[keyOf(s.root, x.path)] !== stampOf(x))
+  const unviewed = rest.find(x => after[keyOf(s.root, x.path)] !== stampOf(x))
   if (unviewed) {
     await select($, keyOf(s.root, unviewed.path))
     await reveal($, keyOf(s.root, unviewed.path))
@@ -1420,7 +1441,7 @@ export const register: Register = on => {
       const marks = Object.fromEntries(Object.entries(savedViewed).filter(([, v]) => typeof v === 'string')) as Record<string, string>
       await update($, viewed, cur => ({ ...marks, ...(cur ?? {}) }))
     }
-    void refresh($)
+    void refresh($).catch(() => undefined)
     return started
   })
 

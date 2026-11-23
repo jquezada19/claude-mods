@@ -88,7 +88,8 @@ const tierFor = async (
 ): Promise<{ tier: string; mtimeMs: number | null }> => {
   const { value: cached = null } = await $.state.get(NOTE_PATH)
   const base = cached === null ? '' : cached.slice(cached.lastIndexOf('/') + 1)
-  let path = cached !== null && matches(base, ticket) ? cached : null
+  // A path cached under another notes folder (the option changed; $.state outlives a reload) is looked up again.
+  let path = cached !== null && cached.startsWith(`${vault}/Work Items/`) && matches(base, ticket) ? cached : null
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (path === null) {
@@ -195,7 +196,17 @@ const tallyFor = async (
  * the own-pace medians and the tier to draw. A sink that cannot be read clears
  * the reading, so nothing stale is drawn over it.
  */
-const refresh = async ($: EngineInterface, options: PluginOptions): Promise<void> => {
+/** Refreshes run one at a time, in order, so a slow older one never lands over a newer one. */
+let refreshing: Promise<void> = Promise.resolve()
+
+const refresh = ($: EngineInterface, options: PluginOptions): Promise<void> => {
+  const run = refreshing.then(() => refreshNow($, options))
+  refreshing = run.catch(() => undefined)
+
+  return run
+}
+
+const refreshNow = async ($: EngineInterface, options: PluginOptions): Promise<void> => {
   const { sink, vault } = await pathsOf($, options)
   const now = await $.clock.now()
   let text: string
@@ -282,6 +293,11 @@ const moved = async ($: EngineInterface, options: PluginOptions): Promise<boolea
   }
 
   const { value: notePath = null } = await $.state.get(NOTE_PATH)
+
+  // A note found under another notes folder: the option changed, so read again.
+  if (notePath !== null && !notePath.startsWith(`${vault}/Work Items/`)) {
+    return true
+  }
 
   if (notePath === null) {
     // No note yet: look for one, so a note written after the first reading is noticed,
@@ -483,13 +499,14 @@ export const register: Register = (on, options) => {
     return { text: lines.join('\n') }
   })
 
+  // The band asks each plugin for its own row (Claude Code 2.1.323+) and stacks
+  // the rows itself (AbovePromptList), so this hook draws only this mod's row.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    const beneath = await next(e)
     const { value: isHidden = false } = await $.state.get(HIDDEN)
     const { value: reading } = await $.state.get(READING)
 
     if (e.props.hasSurvey || isHidden || reading === null || reading === undefined) {
-      return beneath
+      return next(e)
     }
 
     const now = await $.clock.now()
@@ -549,25 +566,17 @@ export const register: Register = (on, options) => {
         W,
       )
 
-      return (
-        <Box flexDirection="column">
-          {beneath}
-          <Svg source={source} alt={text} width={W} height={ROW_H} />
-        </Box>
-      )
+      return <Svg source={source} alt={text} width={W} height={ROW_H} />
     }
 
     return (
-      <Box flexDirection="column">
-        {beneath}
-        <Box>
-          <Text color={color} bold>
-            {`${title} `}
-          </Text>
-          <Text color={color}>{cells}</Text>
-          <Text color={color} bold>{` ${phase}`}</Text>
-          <Text dimColor>{tail}</Text>
-        </Box>
+      <Box>
+        <Text color={color} bold>
+          {`${title} `}
+        </Text>
+        <Text color={color}>{cells}</Text>
+        <Text color={color} bold>{` ${phase}`}</Text>
+        <Text dimColor>{tail}</Text>
       </Box>
     )
   })

@@ -100,6 +100,8 @@ const stepOrKeep = (
         : { turns: sum === null ? prev!.turns! : noteTurn(prev?.turns, turnId, (prev?.turns?.[turnId] ?? 0) + 1) }),
       ...(tools.length === 0 && prev?.tools === undefined ? {} : { tools: [...(prev?.tools ?? []), ...tools].slice(-3) }),
       ...(stop === 'max_tokens' || prev?.isCutOff === true ? { isCutOff: true as const } : {}),
+      // Permission checks counted before the card opened survive a usage step.
+      ...(prev?.checks === undefined ? {} : { checks: prev.checks }),
     }
     await $.state.set(EARLY, kept)
   })
@@ -516,7 +518,13 @@ export const register: Register = (on, options) => {
         timeouts = launches.map(l => l.timeoutMs)
 
         if (options.autoOpen !== false) {
-          await autoOpen($)
+          // The rows are open by now: a pane that fails to open must not cost
+          // them their completion bookkeeping, or they stay running for good.
+          try {
+            await autoOpen($)
+          } catch {
+            // no pane: the band and /agents-panel still show the rows
+          }
         }
       }
     } catch {
@@ -695,9 +703,13 @@ export const register: Register = (on, options) => {
   })
 
   on('command.run', { command: COMMAND }, async $ => {
-    const isOpen = await togglePane($)
+    try {
+      const isOpen = await togglePane($)
 
-    return { text: isOpen ? 'Agents panel opened.' : 'Agents panel closed.' }
+      return { text: isOpen ? 'Agents panel opened.' : 'Agents panel closed.' }
+    } catch {
+      return { text: 'Agents panel: this surface could not open or close the pane.' }
+    }
   })
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -864,46 +876,40 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Whatever another mod draws in the band stays; this row goes after it.
-    const beneath = await next(e)
+    // The band asks each plugin for its own row (Claude Code 2.1.323+) and stacks
+    // the rows itself (AbovePromptList), so this hook draws only this mod's row.
     const { value: list = [] } = await $.state.get(AGENTS)
     const running = list.filter(a => a.status === 'running')
 
     if (e.props.hasSurvey || running.length === 0) {
-      return beneath
+      return next(e)
     }
 
     const { value: tickNow = 0 } = await $.state.get(NOW)
     const at = Math.max(tickNow, ...running.map(a => a.startedAt))
     const text = bandText(running, at)
     const { Box, Text, Button } = $.ui.resolve(e)
-    const button = <Button key="agents-open" label={`×${running.length}`} plain onPress={() => void togglePane($)} />
+    const button = <Button key="agents-open" label={`×${running.length}`} plain onPress={() => void togglePane($).catch(() => undefined)} />
 
     if (e.surface === 'desktop') {
       const { Svg } = $.ui.resolve({ ...e, surface: 'desktop' })
       const W = Math.max(180, Math.min(1600, (e.props.bodyColumns || 100) * 8 - 96))
 
       return (
-        <Box flexDirection="column">
-          {beneath}
-          <Box flexDirection="row" alignItems="center" gap={1}>
-            <Svg source={bandSvg(W, running, at)} alt={text} width={W} height={BAND_H} />
-            {button}
-          </Box>
+        <Box flexDirection="row" alignItems="center" gap={1}>
+          <Svg source={bandSvg(W, running, at)} alt={text} width={W} height={BAND_H} />
+          {button}
         </Box>
       )
     }
 
     return (
-      <Box flexDirection="column">
-        {beneath}
-        <Box>
-          <Text color="magenta" bold>
-            ●{' '}
-          </Text>
-          <Text>{text} </Text>
-          {button}
-        </Box>
+      <Box>
+        <Text color="magenta" bold>
+          ●{' '}
+        </Text>
+        <Text>{text} </Text>
+        {button}
       </Box>
     )
   })

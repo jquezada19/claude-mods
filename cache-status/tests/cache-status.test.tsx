@@ -1,4 +1,5 @@
 import { expect, mock, test } from 'claude-code/testing'
+import type { Engine } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 const T0 = Date.UTC(2026, 9, 7, 12, 0, 0)
@@ -16,6 +17,8 @@ type Usage = {
   cache_creation_input_tokens: number
   model: string
   cache_creation?: { ephemeral_5m_input_tokens: number; ephemeral_1h_input_tokens: number }
+  ephemeral_5m_input_tokens?: number
+  ephemeral_1h_input_tokens?: number
 }
 
 /** What the session is configured with: process env beyond HOME, and merged settings. */
@@ -111,7 +114,7 @@ const world = (on: On, now = T0, setup: Setup = {}) => {
   return it
 }
 
-type Kit = Parameters<Parameters<typeof test>[1]>[0]
+type Kit = Engine
 
 const drawn = async ($: Kit, surface: (typeof SURFACES)[number] = 'desktop') => {
   const ui = await $.ui.mount({
@@ -333,6 +336,26 @@ test('a resume the engine calls likely expired reads cold, without inventing a 5
 test('a cache write that says 5m sets 5m, ahead of any setting', async ($, on) => {
   const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
   await step($, it, { ...rewritten(120_000), cache_creation: { ephemeral_5m_input_tokens: 119_500, ephemeral_1h_input_tokens: 0 } })
+  expect(await drawn($)).toContain('left of 5m')
+})
+
+test('2.1.330 usage: a top-level 5m split sets 5m, ahead of a 1h setting', async ($, on) => {
+  const it = world(on, T0, { settings: { promptCacheTtl: '1h' } })
+  await step($, it, { ...rewritten(120_000), ephemeral_5m_input_tokens: 119_500, ephemeral_1h_input_tokens: 0 })
+  expect(await drawn($)).toContain('left of 5m')
+})
+
+test('2.1.330 usage: a top-level 1h split confirms 1h', async ($, on) => {
+  const it = world(on)
+  await step($, it, { ...rewritten(120_000), ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 119_500 })
+  const text = await drawn($)
+  expect(text).toContain('left of 1h ·')
+  expect(text).not.toContain('assumed')
+})
+
+test('2.1.330 usage: mixed top-level writes take the shorter lifetime', async ($, on) => {
+  const it = world(on)
+  await step($, it, { ...rewritten(120_000), ephemeral_5m_input_tokens: 500, ephemeral_1h_input_tokens: 119_000 })
   expect(await drawn($)).toContain('left of 5m')
 })
 
@@ -670,11 +693,13 @@ test('guard on: a dismissed dialog sends the prompt', GUARD, async ($, on) => {
   expect(r.drop).toBeUndefined()
 })
 
-test('the cache row sits below whatever another mod draws in the band, so plugin-dirs order sets the stack', async ($, on) => {
+test('the cache row draws beside another plugin\'s row: the band stacks rows itself (2.1.323+)', async ($, on) => {
   const it = world(on)
   it.beneath = { type: 'Box', props: {}, children: [{ type: 'Text', props: {}, children: ['♥ SPEND'] }] }
 
-  const text = await drawn($)
-  expect(text).toContain('♥ SPEND')
-  expect(text.indexOf('cache')).toBeGreaterThan(text.indexOf('♥ SPEND'))
+  for (const surface of SURFACES) {
+    const text = await drawn($, surface)
+    expect(text).toContain('cache')
+    expect(text).toContain('♥ SPEND')
+  }
 })

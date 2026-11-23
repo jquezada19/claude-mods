@@ -155,8 +155,9 @@ refreshes it. It polls git only while open and makes no model calls. Details:
 
 ### 1. Check your version
 
-Mods need a recent Claude Code. The documentation says v2.1.287 or later;
-these were seen working in the desktop app on 2.1.284 and 2.1.286.
+Mods need a recent Claude Code: v2.1.323 or later, where each mod draws its
+own row in the band and Claude Code stacks the rows. They were last tested on
+2.1.330.
 
 - Desktop app: update to the latest version.
 - Terminal: run `claude --version`, and update if it is older.
@@ -197,8 +198,8 @@ Windows (paths separated by `;`, forward slashes):
       }
     }
 
-Each path must be absolute or start with `~`. The order sets the rows' order:
-the first mod listed draws at the bottom of the band, the last at the top. To install only one mod, list
+Each path must be absolute or start with `~`. Each mod draws its own row, and
+Claude Code stacks the rows in the order the mods load. To install only one mod, list
 only its path. Mind the commas: a line that is not the last in its block ends
 with one.
 

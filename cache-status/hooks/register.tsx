@@ -61,19 +61,28 @@ const configuredTtl = async ($: EngineInterface): Promise<{ ttlMs: number; basis
   return null
 }
 
-/** The 1h/5m split of a request's cache writes, when the usage carries it (the API's cache_creation). */
+/**
+ * The 1h/5m split of a request's cache writes, when the usage carries it.
+ *
+ * Claude Code 2.1.330's TurnUsage carries the two counts at its top level, present
+ * together or not at all; older builds passed the API's nested `cache_creation`
+ * through, which is still read when the top-level pair is absent.
+ */
 const splitOf = (usage: unknown): { fiveMin: number; oneHour: number } | null => {
-  const cc = (usage as { cache_creation?: { ephemeral_5m_input_tokens?: unknown; ephemeral_1h_input_tokens?: unknown } } | null)
-    ?.cache_creation
+  type Pair = { ephemeral_5m_input_tokens?: unknown; ephemeral_1h_input_tokens?: unknown }
+  const u = usage as (Pair & { cache_creation?: Pair | null }) | null
+  const count = (v: unknown) => (typeof v === 'number' ? v : 0)
+  const isPair = (p: Pair | null | undefined): boolean =>
+    p !== null &&
+    p !== undefined &&
+    (typeof p.ephemeral_5m_input_tokens === 'number' || typeof p.ephemeral_1h_input_tokens === 'number')
+  const pair: Pair | null | undefined = isPair(u) ? u : u?.cache_creation
 
-  if (cc === undefined || cc === null) {
+  if (pair === undefined || pair === null) {
     return null
   }
 
-  const fiveMin = typeof cc.ephemeral_5m_input_tokens === 'number' ? cc.ephemeral_5m_input_tokens : 0
-  const oneHour = typeof cc.ephemeral_1h_input_tokens === 'number' ? cc.ephemeral_1h_input_tokens : 0
-
-  return { fiveMin, oneHour }
+  return { fiveMin: count(pair.ephemeral_5m_input_tokens), oneHour: count(pair.ephemeral_1h_input_tokens) }
 }
 
 const LAST = { plugin: 'cache-status', key: 'last' } as const
@@ -266,7 +275,9 @@ export const register: Register = (on, options) => {
     }
 
     return { drop: `Not sent: cache-status cold-send guard (Cancel). ${where}${isFilled ? '.' : ''}` }
-  })
+    // Fails open on purpose: a guard that cannot read its state sends the prompt as
+    // typed rather than hold it (next is replay-safe here, so a send already made stands).
+  }).catch(($, e, next) => next(e))
 
   // The idle time of a resumed or forked transcript rides the classic event,
   // not session.start (whose input has no such field).
@@ -283,7 +294,7 @@ export const register: Register = (on, options) => {
     }
 
     return next(e)
-  })
+  }).catch(($, e, next) => next(e))
 
   // /clear ends the conversation under this id and no session.start follows:
   // start the row over.
@@ -324,7 +335,7 @@ export const register: Register = (on, options) => {
     await afterCompaction($, done.tokensAfter)
 
     return done
-  })
+  }).catch(($, e, next) => next(e))
 
   on('turn.step', async function* ($, e, next) {
     // The lifetime runs from the start of the request, not the end of the response.
@@ -449,25 +460,17 @@ export const register: Register = (on, options) => {
   })
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    // Like every other band mod, this row goes after whatever is drawn beneath:
-    // the rows then stack in CLAUDE_CODE_PLUGIN_DIRS order, last listed on top
-    // (until 2026-10-13 this row pinned itself above the rest).
-    const beneath = await next(e)
-
+    // The band asks each plugin for its own row (Claude Code 2.1.323+) and stacks
+    // the rows itself (AbovePromptList), so this hook draws only this mod's row.
     if (e.props.hasSurvey) {
-      return beneath
+      return next(e)
     }
 
     const { Box, Text } = $.ui.resolve(e)
     const { value: seen } = await $.state.get(LAST)
 
     if (seen === null || seen === undefined) {
-      return (
-        <Box flexDirection="column">
-          {beneath}
-          <Text dimColor>○ cache · waiting for first response</Text>
-        </Box>
-      )
+      return <Text dimColor>○ cache · waiting for first response</Text>
     }
 
     const left = seen.ttlMs - ((await $.clock.now()) - seen.at)
@@ -492,14 +495,11 @@ export const register: Register = (on, options) => {
           } · ${tokens(reCached)} re-cached`
 
     return (
-      <Box flexDirection="column">
-        {beneath}
-        <Box>
-          <Text color={isCold ? 'red' : left < CLOSE ? 'yellow' : 'green'} bold>
-            {isCold ? '○ CACHE COLD' : '● CACHE WARM'}
-          </Text>
-          <Text dimColor>{`${detail}${tally}`}</Text>
-        </Box>
+      <Box>
+        <Text color={isCold ? 'red' : left < CLOSE ? 'yellow' : 'green'} bold>
+          {isCold ? '○ CACHE COLD' : '● CACHE WARM'}
+        </Text>
+        <Text dimColor>{`${detail}${tally}`}</Text>
       </Box>
     )
   })

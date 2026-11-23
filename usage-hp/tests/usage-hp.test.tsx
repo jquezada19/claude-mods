@@ -689,6 +689,59 @@ test('a fresh session prices each call by its model at the official rates', asyn
   expect(await drawn($)).toContain('$0.40 this session (~$0.39 billed)')
 })
 
+test('Fable 5.2 has its own card, and split cache writes pay 5m and 1h rates apiece', async ($, on) => {
+  const it = world(on)
+  const next = steps(on)
+  await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+  await $.command.run(hp('0 300'))
+
+  // 1M reads at $0.20, 100k 5-minute writes at 1.25 x $8, 100k 1-hour writes at 2 x $8.
+  next.usage = {
+    ...usage('claude-fable-5-2', 1_000_000, 200_000),
+    ephemeral_5m_input_tokens: 100_000,
+    ephemeral_1h_input_tokens: 100_000,
+  } as never
+  await step($)
+  it.usd = 2.8
+  await $.turn.complete(TURN)
+
+  const key = [...it.store.keys()].find(one => one.startsWith('priced:s1:main'))
+  expect(Math.round(((it.store.get(key!) as { usd: number }).usd) * 1e4) / 1e4).toBe(2.8)
+})
+
+test('the nested cache_creation split of older builds is priced the same way', async ($, on) => {
+  const it = world(on)
+  const next = steps(on)
+  await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+  await $.command.run(hp('0 300'))
+
+  next.usage = {
+    ...usage('claude-fable-5-2', 0, 100_000),
+    cache_creation: { ephemeral_5m_input_tokens: 100_000, ephemeral_1h_input_tokens: 0 },
+  } as never // 100k x 1.25 x $8
+  await step($)
+  it.usd = 1
+  await $.turn.complete(TURN)
+
+  const key = [...it.store.keys()].find(one => one.startsWith('priced:s1:main'))
+  expect(Math.round(((it.store.get(key!) as { usd: number }).usd) * 1e4) / 1e4).toBe(1)
+})
+
+test('cache writes with no split keep the 1-hour rate', async ($, on) => {
+  const it = world(on)
+  const next = steps(on)
+  await $.session.start({ cwd: '/tmp', surface: 'desktop' } as never)
+  await $.command.run(hp('0 300'))
+
+  next.usage = usage('claude-fable-5-2', 0, 100_000) // 100k x $16
+  await step($)
+  it.usd = 1.6
+  await $.turn.complete(TURN)
+
+  const key = [...it.store.keys()].find(one => one.startsWith('priced:s1:main'))
+  expect(Math.round(((it.store.get(key!) as { usd: number }).usd) * 1e4) / 1e4).toBe(1.6)
+})
+
 test('subagents are priced under their own keys and summed with the main thread', async ($, on) => {
   const it = world(on)
   const next = steps(on)
