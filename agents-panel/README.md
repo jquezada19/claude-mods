@@ -14,18 +14,29 @@ In the terminal the same row is text:
   leaves when the last one finishes. On desktop each running agent walks in
   front as its own sprite (as many as fit, up to six, then `+n`); the terminal
   shows a magenta `●` instead. Then the count, the tokens they have spent and how long the oldest has been going.
-  The `×n` button opens or closes the pane. The token figure is `—` when no
-  running agent reports tokens (a lone Codex run or other Bash-launched agent), never `0`.
+  The `×n` button opens or closes the pane. The token figure is left out when no
+  running agent reports tokens (a lone Codex run or other Bash-launched agent): never `0`, never a dash.
 - **Agents pane** (`/agents-panel` toggles it, since `/agents` is the engine's built-in; it opens itself once per session on
   the first subagent, Bash-launched agent or Codex run unless `autoOpen` is off): on
   desktop, header tiles for agents, tokens and time (the terminal shows one dim
-  line, `3 agents · 612k · 4:40`, beside the `Collapse` button); `Running · N`
-  above the live cards; one card per subagent with its description, type, model
-  and effort, context fill, tokens, cost and elapsed time, and a status mark.
+  line, `3 agents · 612k · 4:40`, beside the `▴ Collapse` button, which desktop draws as its own padded secondary button); `Running · N`
+  above the live cards; one rounded card per agent with its task, a pill naming
+  whose model runs it (Claude, Codex, Cursor, Antigravity), the model and effort,
+  its state as a word (`Running`, `Done`, `Timed out`, …) and a labelled readout:
+  a subagent's context window, tokens, cost and time; an external seat's time
+  against its timeout while it runs, then the tokens it used. A bar shows only
+  while it measures something. Under the tiles, a usage line: Codex's own 5-hour
+  and 7-day limits, and the Cursor and Antigravity tokens the consult ledger
+  recorded today (this machine's count, not a vendor quota).
   `Collapse` shrinks it to one sprite per agent on desktop (up to six, then
   `+n`, then the totals) or one coloured status mark per agent in the
-  terminal; the `▾ Finished · N` fold (`▸` when shut) hides finished cards
-  (50 drawn at most, then `+n more`). With none yet it says `No subagents yet.`
+  terminal; the `▾ Finished · N` fold (`▸` when shut) hides the finished runs.
+  Finished runs are summarised: one row per vendor and model (`Codex · gpt-6.2-sol · low · 23 done · 7:41`,
+  the tokens before the time when the runs reported any), twelve rows at most, then `+n more kinds`. A run that did
+  not end done (failed, timed out, stopped, lost) keeps its own card above the summary. `Each card` beside the
+  fold lists every finished card instead (50 at most, then `+n more`), and `Summary` goes back. A card's
+  `▸ details` opens its task, newest tool uses, cut-off and the start of its answer inside the card,
+  wrapped to its width. With none yet it says `No subagents yet.`
 
 The pane, open and collapsed:
 
@@ -41,13 +52,13 @@ Every costume, by the agent type that wears it:
 
 | Part | Meaning |
 |---|---|
-| Clawd costume | the agent's type: Explore is a pirate, Plan an engineer, claude-code-guide a chef; every other subagent takes the costume its spawn number points at, counting every subagent of the session including those three (plain, pirate, detective, engineer, chef, then round again), so a session shows them all; any Codex agent or run (a `codex:` type or `codex-rescue`, `/codex:review`, `codex exec`) is not a Clawd but the blue Codex bot, whose screen cursor blinks while it runs; a Bash-launched Kimi run (`buddy:kimi…`) is a panda, a Gemini one a rainbow droplet whose colors sweep while it runs, a Grok one (or `cursor-grok`) a ball (black on light, white on dark), a Composer one a grey cube with a raised fist, a DeepSeek one a blue whale that rocks and flicks its fluke; each walks while its agent runs. Sprites are desktop only: a terminal card has a coloured status mark, the description, a dim `type · model · effort` line, then a bar and the stats |
+| Clawd costume | the agent's type: Explore is a pirate, Plan an engineer, claude-code-guide a chef; every other subagent takes the costume its spawn number points at, counting every subagent of the session including those three (plain, pirate, detective, engineer, chef, then round again), so a session shows them all; any Codex agent or run (a `codex:` type or `codex-rescue`, `/codex:review`, `codex exec`) is not a Clawd but the blue Codex bot, whose screen cursor blinks while it runs; a Bash-launched Kimi run (`buddy:kimi…`) is a panda, any Gemini one (`buddy:gemini…` or the Antigravity CLI's `agy-gemini…`) a rainbow droplet whose colors sweep while it runs, a Grok one (or `cursor-grok`) a ball (black on light, white on dark), a Composer one a grey cube with a raised fist, a DeepSeek one a blue whale that rocks and flicks its fluke; each walks while its agent runs. A Codex row, and a subagent that relays to Codex (`codex-rescue`), shows the model and effort Codex runs at (its call's `--model`/`-m` and `--effort`/`-c model_reasoning_effort=`, else `~/.codex/config.toml`), not the relay's own Claude model. Sprites are desktop only: a terminal card has a coloured status mark, the description, a dim `type · model · effort` line, then a bar and the stats |
 | `ctx 41% · 82k` | the agent's context after its latest request: input plus cache read plus cache write. The percent is against the window of the model the agent runs, as Claude Code's agent list reports it (2.1.326 and later); on an older build, or before the list has been read, it is against the session model's window and shows only when the agent runs that model |
 | `196k` | every request's four token counts, summed |
 | `$0.42` | what `/cost` credited the agent's requests, from Claude Code's agent list: an estimate, not the bill; `<$0.01` under a cent. Absent where the engine keeps no cost for the agent (a Bash-launched run) |
 | `0:19` | elapsed since the spawn, to the end for a finished agent; `h:mm:ss` past an hour |
 | `· waiting` `· cut off` `· 2 asked` `· 1 denied` `· awaiting approval` | after the stats when they apply: the engine's waiting/idle/pending state, an answer stopped at the output limit, permission checks asked or denied, and a call waiting on approval |
-| context bar | desktop: the costume's colour, green and full when done; terminal: 6–20 cells of `█` on `░`, magenta, green and full when done |
+| context bar | desktop: blue, amber from 80% (`Context nearly full`), with a tick at the 80% mark, the same as a seat's timeout bar; no bar once done; terminal: 6–20 cells of `█` on `░`, magenta, green and full when done |
 | `●` `✓` `✗` `■` `○` | running (magenta), finished (green), failed (red: an error or a refusal), stopped (yellow on the terminal, a grey square on desktop: the run was stopped, as the engine's report or its agent list says), lost (grey) |
 | `— · —` | a `lost` agent: it vanished from the engine's agent list without ever reporting a request (a remote run, or one that never started); nothing is known about its tokens |
 
@@ -81,8 +92,8 @@ Until 2026-10-10 a Codex row had no deadline and closed only on its
 notification, so one whose notification arrived mid-turn ran forever. The done file's verdict beats the
 notification's, since a command ending in `; echo "REAL_EXIT=$?"` always exits 0.
 A Codex run inside a subagent is that subagent's own work and gets no second row.
-These rows carry no token figures: their cards show `— · —`, and a header or
-band whose agents are all such rows shows `—` tokens.
+These rows carry no token figures while they run: their cards show the timeout budget or the elapsed time, and a header or
+band whose agents are all such rows leaves the token count out (the Tokens tile reads `Not reported`).
 
 Until 2026-10-12 `session.start` registered `/agents` before starting the
 one-second clock; the engine refuses that built-in name, the throw skipped the
@@ -159,3 +170,25 @@ at another copy of the mod).
 ## 0.6.1 (2026-11-23)
 
 - **Collapsed band, no drawing.** While the band is collapsed the row is its words alone: no sprites, no button.
+
+## 0.7.0 (2026-11-24)
+
+- **Redrawn cards.** Each agent sits on a rounded card: the task on a line of its own, a pill for whose model runs it, the model and effort, and its state as a word in a fixed place. The lone status glyph and the divider line are gone.
+- **No more `— · —`.** An external seat (a buddy on the Cursor or Antigravity CLI, a Codex run) reports nothing while it runs, so its card now shows the one thing known: `Timeout budget · 1:14 / 15:00`, with a bar that turns amber at 80% (`Timeout soon`). A seat with no known timeout shows its elapsed time alone.
+- **The bar only measures.** A subagent's bar is its context window while it runs; an external seat's is its timeout. A finished card has no bar and is shorter. The solid green bar on every finished card is gone.
+- **Seat tokens.** When a seat ends, its card shows what it used: a buddy seat's from the `USAGE:` line of the launcher's done file, a Codex run's from its own session log. The header's Tokens tile counts them. A launcher timeout reads `Timed out`; any other failure shows its exit code.
+- **Usage line.** Under the tiles: `Codex limit · 5h 20% · 7d 37%` from Codex's session log, and `Cursor today` / `Antigravity today` in tokens from `~/.claude/metrics/consult-ledger.jsonl`. Read when a seat starts and when one ends. Neither the Cursor nor the Antigravity CLI reports a quota locally, so those two are this machine's count.
+- **Fixes.** A Codex run pinned with `-c model="…"` shows that model (it showed the config default). A command that only reads or tests a launcher script (`sed … buddy-run.sh`, `grep … relay.mjs`, `test-buddy-run.sh`) no longer draws a seat. A launch inside `for m in a b; do … "$m" …` is one card per model. buddy-run's default timeout is read as its real 600 s. A launch that is only named inside quoted text or a heredoc body (a `pgrep -fl "… codex exec"`, a note appended through `<<EOF`) no longer draws a card; a quoted script path, a shell's `-c` string, a `$(…)` capture and a heredoc fed to a shell still do. A Codex limit window whose reset time has passed reads `reset` until a new figure is read (a 5h window read at 23% kept showing 23% after it reset; 0% would be a number nobody measured); the reset time comes from `resets_at` in the same session-log line, and each window is named from its own `window_minutes` (`5h`, `7d`) rather than its place. A plan with one window draws that window alone; a `null` first window no longer borrows the second's figure; a later snapshot for another quota with no windows no longer blanks the reading. A `codex exec` continued over lines with a backslash is read as one command (its flags and wrapper timeout were dropped at the first line end); `codex exec-server` is not a run; an effort named inside the prompt is not the run's effort; a run with `--ignore-user-config` no longer shows the config's model and effort.
+- **One render stays small.** The desktop pane stopped taking renders, buttons included, when its 20th card took one render past about 262,000 characters of drawing (seen live 2026-11-24; the limit is inferred, not documented). A render now carries at most 200,000: the header, the running cards, then the newest finished cards that fit, with `+n more` for the rest.
+- **Codex runs read their own log, or none.** A run under its own `CODEX_HOME` (the command's assignment, else the environment's) is read from there, and so are its config defaults. A `--ephemeral` run writes no session log and a `resume` appends to an older one, so those cards show no token count instead of a neighbouring run's. The usage line's limits come from the session log written last (it was the one started last), today's or, just past midnight, yesterday's; a reading whose reset is still ahead survives midnight, while the ledger's day counts start clean.
+- **No dash for an unknown count.** While no row has reported tokens, the Tokens tile reads `Not reported` and the band and summary lines leave the figure out (`3 running · 2:39`); they showed `—`.
+- **One meter.** Every bar is the same blue and turns amber at 80%, where its tick stands: a seat's timeout (`Timeout soon`) and now a subagent's context window (`Context nearly full`). The context bar was the costume's colour, and Clawd's orange read like the warning amber.
+- **Header.** The three tiles share the cards' outline and corner radius, each usage entry starts under its tile's label, and a bar's track is visible against the card in both themes.
+
+## 0.8.0 (2026-11-24)
+
+- **Finished runs are a summary.** The finished section is one outlined block, one 36-high row per vendor and model: the pill, the model and effort, then `23 done`, the summed tokens (when the runs reported any) and the summed time in right-aligned columns, a hairline between rows. Twenty-five size-check runs on one model were twenty-five cards; they are one row. A run that did not end done keeps its card above the block. `Each card` lists every finished card as before; `Summary` goes back.
+- **Details stay in the card.** An opened card draws its task (three lines at most), newest tool uses, cut-off and answer start inside its own outline, under a hairline, wrapped to the card's text column. They were rows of text laid under the card and ran past the pane's right edge.
+- **Collapse is a button.** On desktop `▴ Collapse` / `▾ Expand` is the app's own secondary button with room around it; it was a bare word.
+- **Spacing on a 4-pixel scale.** Card gap 8 (was 6), corner radius 12 for cards and tiles (was 10), tile inset 12 (was 10), gap between tiles 8 (was 6), vendor pills 20 high with 8 either side of the name. Row height, cell padding, divider and pill sizes follow the spacing, radius and density values of Meta's Astryx design system (public, MIT; read, not installed).
+

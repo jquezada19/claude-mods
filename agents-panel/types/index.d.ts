@@ -57,7 +57,29 @@ export type AgentRun = {
    * a backgrounded one when `doneFile` lands, on its task notification, at the main turn's
    * end once `taskId` is no longer in flight, or as lost past `deadline`.
    */
-  external?: { doneFile: string | null; deadline: number | null; taskId?: string }
+  external?: {
+    doneFile: string | null
+    deadline: number | null
+    taskId?: string
+    /** The launch's own timeout (the launcher's or a wrapper's), which the card's bar runs against; absent when none is known. */
+    capMs?: number
+    /** What it used once it ended: a buddy seat's from its done file, a Codex run's from its session log. Absent until read. */
+    tokens?: number
+    /** The exit code its done file named (124 is the launcher's timeout). */
+    exit?: number
+    /** The Codex session log its tokens were read from, so two runs never read the same one. */
+    log?: string
+    /** Where this Codex run keeps its state when the command or the environment names it (`CODEX_HOME`); absent, `~/.codex`. */
+    codexHome?: string
+    /** A Codex run with no session log of its own to read (`--ephemeral` writes none, `resume` appends to an older one). */
+    noLog?: true
+  }
+  /**
+   * Set on a subagent that hands its work to Codex (codex-rescue): the model and effort its
+   * Codex call runs at, from the call's flags, else ~/.codex/config.toml. The card shows these
+   * in place of the subagent's own Claude model, which only relays.
+   */
+  codex?: { model: string; effort?: string }
 }
 
 /** A card's drill-down, clipped: the task (400), up to three tool lines (80 each), the answer's start (400). */
@@ -75,6 +97,35 @@ export type Panel = {
   hasAutoOpened: boolean
   /** The cards opened to their details, by agent id. */
   open?: string[]
+  /** Every finished card listed; absent or false, finished runs are summarised one row per vendor and model (0.8.0). */
+  showsEachDone?: boolean
+}
+
+/**
+ * Codex's rate-limit windows (two, or one on some plans) as percent used when last read, each with the time (ms) its
+ * window resets when the log names one (past that time the figure read is no longer true)
+ * and the window's length in minutes when the log names it (300 is the 5h window, 10080 the 7d).
+ */
+export type CodexLimits = {
+  primary: number
+  /** Absent on a plan with one window; a lone window is always `primary` here, whichever slot the log had it in. */
+  secondary?: number
+  primaryResetsAt?: number
+  secondaryResetsAt?: number
+  primaryMinutes?: number
+  secondaryMinutes?: number
+}
+
+/**
+ * What the vendors behind the external seats have used, as of the last read. `codex` is the
+ * account's own rate-limit windows, percent used; `cursor` and `antigravity` are this machine's
+ * consult-ledger tokens for the local day `day` starts, not a vendor quota.
+ */
+export type Usage = {
+  day: number
+  codex?: CodexLimits
+  cursor?: number
+  antigravity?: number
 }
 
 /** A model request's four token counts and model, as a step or completion reports them. */
@@ -123,6 +174,7 @@ declare module 'claude-code' {
       session: Session | null
       lastReconcileAt: number
       early: Record<string, EarlyStep>
+      usage: Usage | null
     }
   }
 }

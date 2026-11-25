@@ -399,6 +399,9 @@ test('at most three cards stay open; a card that leaves is no longer listed open
     await spawn($, t)
     await complete($, `id-${t}`)
   }
+  const each = await pane($, 'terminal')
+  await each.press('each')
+  await each.done()
   for (const t of ['a', 'b', 'c', 'd']) {
     const p = await pane($, 'terminal')
     await p.press(`detail:id-${t}`)
@@ -458,7 +461,9 @@ test("a subagent\'s permission checks reach its card; the engine\'s answer passe
   ;[a] = await rows(it)
   expect(a!.checks).toEqual({ asked: 1, denied: 1 })
   let p = await pane($, 'terminal')
-  expect(p.texts).toContain('1 asked · 1 denied · awaiting approval')
+  expect(p.texts).toContain('1 asked · 1 denied')
+  // a card waiting on an approval says so as its state, where the eye looks for it
+  expect(p.texts).toContain('Awaiting approval')
   await p.done()
   // The asked call returns (approved and run): no longer awaiting, before any next step.
   await $.tool.call({ tool: 'Read', file_path: '/x', tool_use_id: 'c1', agentId: 'id-a' } as never)
@@ -680,12 +685,13 @@ const pane = async ($: Kit, surface: (typeof SURFACES)[number], bodyColumns = 80
   const svgs = await h.findAll({ type: 'Svg' })
   const alts = svgs.map(one => String(one.props.alt ?? ''))
   const buttons = await h.findAll({ type: 'Button' })
+  const boxes = await h.findAll({ type: 'Box' })
   const press = async (key: string) => {
     await h.press({ key })
   }
   const done = async () => (ui as never as { unmount: () => Promise<void> }).unmount()
 
-  return { texts, svgs, alts, buttons, press, done, all: `${texts}\n${alts.join('\n')}` }
+  return { texts, svgs, alts, buttons, boxes, press, done, all: `${texts}\n${alts.join('\n')}` }
 }
 
 for (const surface of SURFACES) {
@@ -708,22 +714,32 @@ for (const surface of SURFACES) {
     await step($, it, u(10), 'id-a')
     await $.turn.complete({ ...TURN, agentId: 'id-a', answer: 'Found three definitions.' } as never)
     let p = await pane($, surface)
+    // a run that ended done is in the summary, with no card to open until each card is listed
+    expect(p.buttons.some(b => b.props.key === 'detail:id-a')).toBe(false)
+    await p.press('each')
+    await p.done()
+    p = await pane($, surface)
     expect(p.all).not.toContain('Task:')
     // The cut-off shows on the card without opening it.
     expect(p.all).toContain('cut off')
     await p.press('detail:id-a')
     await p.done()
     p = await pane($, surface)
-    expect(p.texts).toContain('Task: Find every place the status colors are defined.')
-    expect(p.texts).toContain('Read /src/colors.ts')
-    expect(p.texts).toContain('Answer: Found three definitions.')
-    expect(p.texts).toContain('Stopped at the output limit')
+    expect(p.all).toContain('Task: Find every place the status colors are defined.')
+    expect(p.all).toContain('Read /src/colors.ts')
+    expect(p.all).toContain('Answer: Found three definitions.')
+    expect(p.all).toContain('Stopped at the output limit')
+    if (surface === 'desktop') {
+      // drawn inside the card, not as rows of text under it that run past the pane's edge
+      expect(p.texts).not.toContain('Task:')
+      expect(p.svgs.some(one => String(one.props.source).includes('Read /src/colors.ts'))).toBe(true)
+    }
     // The other card stays shut.
-    expect(p.texts).not.toContain('do the thing')
+    expect(p.all).not.toContain('do the thing')
     await p.press('detail:id-a')
     await p.done()
     p = await pane($, surface)
-    expect(p.texts).not.toContain('Task:')
+    expect(p.all).not.toContain('Task:')
     await p.done()
   })
 
@@ -805,10 +821,17 @@ for (const surface of SURFACES) {
     await it.clock.advance(19 * SECOND)
     await complete($, 'id-codex:codex-rescue')
     p = await pane($, surface)
+    // finished runs are summarised by vendor and model: the run's figures, not its card
+    expect(p.all).toContain('Codex · codex-rescue · Opus 5.5 · high · 1 done · 83k · 0:19')
+    expect(p.all).not.toContain('diagnose the leak')
+    expect(p.buttons.map(one => String(one.props.key)).filter(k => !k.startsWith('detail:'))).toEqual(['compact', 'done', 'each'])
+    await p.press('each')
+    await p.done()
+    p = await pane($, surface)
     expect(p.all).toContain('diagnose the leak')
     expect(p.all).toContain('codex-rescue')
     expect(p.all).toContain('Opus 5.5')
-    expect(p.all).toContain('ctx 41% · 82k · 83k · 0:19')
+    expect(p.all).toContain('83k tokens · ctx 41% · 0:19 elapsed')
     expect(p.all).toContain('fix a<b && c')
     if (surface === 'desktop') {
       expect(p.svgs.some(one => String(one.props.source).includes('fix a&lt;b &amp;&amp; c'))).toBe(true)
@@ -819,7 +842,7 @@ for (const surface of SURFACES) {
     }
     // The pane's own toggles, and one details button per card that has something to show.
     const keys = p.buttons.map(one => String(one.props.key))
-    expect(keys.filter(k => !k.startsWith('detail:'))).toEqual(['compact', 'done'])
+    expect(keys.filter(k => !k.startsWith('detail:'))).toEqual(['compact', 'done', 'each'])
     expect(keys.filter(k => k.startsWith('detail:')).sort()).toEqual(['detail:id-codex:codex-rescue', 'detail:id-general-purpose'])
     await p.press('done')
     await p.done()
@@ -830,7 +853,7 @@ for (const surface of SURFACES) {
     await p.press('compact')
     await p.done()
     p = await pane($, surface)
-    expect(p.buttons.map(one => one.props.label)).toEqual(['Expand'])
+    expect(p.buttons.map(one => one.props.label)).toEqual(['▾ Expand'])
     if (surface === 'desktop') {
       expect(p.alts.length).toBe(1)
       expect(String(p.svgs[0]!.props.source)).toContain('c-codex"')
@@ -839,7 +862,7 @@ for (const surface of SURFACES) {
   })
 }
 
-test('desktop: the pane draws at most 50 finished cards and a +n line; a lost row shows dashes', async ($, on) => {
+test('desktop: the pane draws the newest finished cards its markup budget holds and a +n line; a lost row says no report came', async ($, on) => {
   const it = world(on)
   await $.session.start({ cwd: '/t' } as never)
   for (let i = 0; i < 60; i += 1) {
@@ -851,11 +874,18 @@ test('desktop: the pane draws at most 50 finished cards and a +n line; a lost ro
   await complete($)
   // 60 s of absence, read by the next throttled tick (each ended subagent's settle read moves the window).
   await it.clock.advance(70 * SECOND)
+  const first = await pane($, 'desktop')
+  await first.press('each')
+  await first.done()
   const p = await pane($, 'desktop')
-  // The header and 50 cards: the lost ghost is a finished row like the sixty done ones.
-  expect(p.svgs.length).toBe(1 + 50)
-  expect(p.texts).toContain('+11 more')
-  expect(p.alts.some(a => a.includes('run ghost:') && a.includes('lost') && a.includes('— · —'))).toBe(true)
+  // The header and the newest cards that fit one render (never all 61): the lost ghost is a
+  // finished row like the sixty done ones, and the newest, so it is always among the drawn.
+  const cards = p.svgs.length - 1
+  expect(cards).toBeGreaterThan(5)
+  expect(cards).toBeLessThanOrEqual(50)
+  expect(p.svgs.reduce((n, one) => n + String(one.props.source ?? '').length, 0)).toBeLessThanOrEqual(200_000)
+  expect(p.texts).toContain(`+${61 - cards} more`)
+  expect(p.alts.some(a => a.includes('run ghost:') && a.includes('lost') && a.includes('No report received') && !a.includes('—'))).toBe(true)
 })
 
 test('/agents toggles the pane', async ($, on) => {
@@ -908,9 +938,17 @@ test('review: a rejected list leaves lastReconcileAt alone, so the next tick ret
 
 /** The Bash tool and the disk beneath the mod, for launches: `files` is what has landed. */
 const shell = (on: On) => {
-  const it = { files: new Map<string, string>(), calls: 0, isError: false, bgId: '' }
-  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/x' : undefined }) as never)
-  on('fs.exists', (_, e) => ({ value: it.files.has(e.path) }) as never)
+  const it = { files: new Map<string, string>(), mtimes: new Map<string, number>(), env: {} as Record<string, string | undefined>, calls: 0, isError: false, bgId: '' }
+  on('env.get', (_, e) => ({ value: e.name === 'HOME' ? '/Users/x' : it.env[e.name] }) as never)
+  on('fs.exists', (_, e) => ({ value: it.files.has(e.path) || [...it.files.keys()].some(f => f.startsWith(`${e.path}/`)) }) as never)
+  on('fs.stat', (_, e) => ({ value: { kind: 'file', size: (it.files.get(e.path) ?? '').length } }) as never)
+  on('fs.list', (_, e) =>
+    ({
+      value: [...it.files.keys()]
+        .filter(f => f.startsWith(`${e.path}/`) && !f.slice(e.path.length + 1).includes('/'))
+        .map((f, i) => ({ name: f.slice(e.path.length + 1), kind: 'file', size: it.files.get(f)!.length, mtimeMs: it.mtimes.get(f) ?? i })),
+    }) as never,
+  )
   on('fs.read', (_, e) => {
     const text = it.files.get(e.path)
 
@@ -949,7 +987,7 @@ test('launch: a foreground buddy call is a row for its length; an error fails it
   await bash($, `${RUN} kimi-k3-high /tmp/p 300`)
   let [a] = await rows(it)
   expect(a).toMatchObject({ id: 'tu-bash:0', type: 'buddy:kimi-k3-high', description: 'ask the panel', status: 'done', endedAt: T0 })
-  expect(a!.external).toEqual({ doneFile: '/tmp/p/meta-kimi-k3-high.txt', deadline: null })
+  expect(a!.external).toEqual({ doneFile: '/tmp/p/meta-kimi-k3-high.txt', deadline: null, capMs: 300 * SECOND })
   expect(it.opens).toEqual(['agents'])
   sh.isError = true
   await bash($, `codex exec "explain"`, { tool_use_id: 'tu-2' })
@@ -984,7 +1022,7 @@ test('launch: a backgrounded seat runs until its meta file lands, or is lost pas
     ['buddy:grok-4.7-high', 'running'],
     ['buddy:gemini-3.1-pro', 'running'],
   ])
-  expect(list[0]!.external).toEqual({ doneFile: '/tmp/p/meta-kimi-k3-high.txt', deadline: T0 + 120 * SECOND })
+  expect(list[0]!.external).toEqual({ doneFile: '/tmp/p/meta-kimi-k3-high.txt', deadline: T0 + 120 * SECOND, capMs: 60 * SECOND })
   sh.files.set('/tmp/p/meta-kimi-k3-high.txt', 'EXIT:0\n')
   sh.files.set('/tmp/p/meta-gemini-3.1-pro.txt', 'EXIT:124\n')
   await complete($)
@@ -1012,8 +1050,8 @@ test('launch: a background run with no done file ends on its notification; the m
     ['tu-g:0', 'buddy:grok-4.7-high', 'running'],
   ])
   // Codex names no timeout of its own; the timeout wrapper's 1800 s bounds it.
-  expect(list[0]!.external).toEqual({ doneFile: null, deadline: T0 + 1860 * SECOND })
-  expect(list[1]!.external).toEqual({ doneFile: null, deadline: T0 + 960 * SECOND })
+  expect(list[0]!.external).toEqual({ doneFile: null, deadline: T0 + 1860 * SECOND, capMs: 1800 * SECOND })
+  expect(list[1]!.external).toEqual({ doneFile: null, deadline: T0 + 960 * SECOND, capMs: 900 * SECOND })
   await it.clock.advance(5 * SECOND)
   await notify($, 'tu-cx')
   await notify($, 'tu-k', 'killed')
@@ -1042,6 +1080,22 @@ test('launch: a call the engine backgrounds keeps its row running; Codex inside 
   await bash($, 'node /p/codex-companion.mjs review', { agentId: 'id-codex-rescue', tool_use_id: 'tu-sub' })
   expect((await rows(it)).length).toBe(1)
   expect(sh.calls).toBe(2)
+})
+
+test('launch: a Codex run shows Codex model and effort, from flags else ~/.codex/config.toml; a relaying subagent takes them', async ($, on) => {
+  const it = world(on)
+  const sh = shell(on)
+  await $.session.start({ cwd: '/t' } as never)
+  sh.files.set('/Users/x/.codex/config.toml', 'model = "gpt-6.2-astra"\nmodel_reasoning_effort = "high"\n[profiles.x]\nmodel = "nope"\n')
+  await bash($, 'codex exec "go" </dev/null', { tool_use_id: 'tu-cfg' })
+  await bash($, 'node /p/codex-companion.mjs review --effort low', { tool_use_id: 'tu-flag' })
+  expect((await rows(it)).map(r => [r.model, r.effort])).toEqual([
+    ['gpt-6.2-astra', 'high'],
+    ['gpt-6.2-astra', 'low'],
+  ])
+  await spawn($, 'codex:codex-rescue', 'diagnose the leak')
+  await bash($, 'node /p/codex-companion.mjs task --effort medium "fix it"', { agentId: 'id-codex:codex-rescue', tool_use_id: 'tu-sub' })
+  expect((await rows(it)).find(r => r.id === 'id-codex:codex-rescue')).toMatchObject({ codex: { model: 'gpt-6.2-astra', effort: 'medium' } })
 })
 
 test('launch: a backgrounded call a hook denies (an error with no task id) fails its row at once, never a ghost', async ($, on) => {
@@ -1094,7 +1148,7 @@ test("launch: the main turn\'s end closes a backgrounded run whose task is no lo
   sh.bgId = 'bg1'
   await bash($, `${RUN} grok-4.7-high /tmp/q 600`, { run_in_background: true, tool_use_id: 'tu-g' })
   let list = await rows(it)
-  expect(list[0]!.external).toEqual({ doneFile: null, deadline: T0 + 960 * SECOND, taskId: 'bcx1' })
+  expect(list[0]!.external).toEqual({ doneFile: null, deadline: T0 + 960 * SECOND, capMs: 900 * SECOND, taskId: 'bcx1' })
   // a turn ends while all three are in flight: nothing changes
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [
     { id: 'bcx1', type: 'shell', status: 'running', description: 'codex' },
@@ -1132,7 +1186,7 @@ test('launch: a backgrounded Codex run whose notification never comes is lost pa
 })
 
 for (const surface of SURFACES) {
-  test(`review (${surface}): a refused /agents still starts the clock, so a background Codex run's time ticks and its tokens read —`, async ($, on) => {
+  test(`review (${surface}): a refused /agents still starts the clock, so a background Codex run's time ticks and its unreported tokens are left out`, async ($, on) => {
     // 2026-10-12: session.start threw at command.register before clock.every, so `now` never moved
     // and a background `codex exec` read `— · — · 0:00` and `1 running · 0 · 0:00` for minutes.
     const it = world(on)
@@ -1150,10 +1204,13 @@ for (const surface of SURFACES) {
     expect(it.state.get('now')).toBe(T0 + 125 * SECOND)
     const b = await band($, surface)
     const text = surface === 'desktop' ? String(b.svgs[0]?.props.alt ?? '') : b.texts
-    expect(text).toContain('1 running · — · 2:05')
+    expect(text).toContain('1 running · 2:05')
+    expect(text).not.toContain('—')
     await b.done()
     const p = await pane($, surface)
-    expect(p.all).toContain('— · — · 2:05')
+    // no dashes for what a Codex run does not report: its time against the wrapper's timeout
+    expect(p.all).toContain('Timeout budget · 2:05 / 30:00')
+    expect(p.all).not.toContain('— · —')
     await p.done()
     await it.clock.settle()
   })
@@ -1217,7 +1274,7 @@ test("the list's per-agent figures reach the card: a subagent on another model g
   const [a] = await rows(it)
   expect(a).toMatchObject({ window: 1_000_000, usd: 0.42, model: 'claude-sonnet-5-5' })
   const p = await pane($, 'terminal')
-  expect(p.texts).toContain('ctx 8% · 82k')
+  expect(p.texts).toContain('Context window · 8% · 82k')
   expect(p.texts).toContain('$0.42')
   await p.done()
 })
@@ -1432,3 +1489,206 @@ test('collapsed, the band row is its words alone: no sprites, no button', async 
   expect(b.buttons.length).toBe(0)
   await b.done()
 })
+
+test('launch: a seat that ends leaves its tokens and exit code on its card, and the usage strip reads the ledger', async ($, on) => {
+  const it = world(on)
+  const sh = shell(on)
+  await $.session.start({ cwd: '/t' } as never)
+  sh.bgId = 'b1'
+  await bash($, `timeout -k 10 930 ${RUN} agy-gemini-4-neon-high /tmp/p 900`, { run_in_background: true, tool_use_id: 'tu-g' })
+  let [a] = await rows(it)
+  expect(a!.external).toMatchObject({ capMs: 900 * SECOND })
+  await it.clock.advance(74 * SECOND)
+  let p = await pane($, 'desktop')
+  expect(p.alts.some(t => t.includes('Antigravity · gemini-4-neon-high, running, Timeout budget · 1:14 / 15:00'))).toBe(true)
+  await p.done()
+  // the launcher's done file: its exit code, then what the seat used
+  sh.files.set('/tmp/p/meta-agy-gemini-4-neon-high.txt', 'EXIT:0\nUSAGE:{"tokens_in": 19778, "tokens_out": 31696, "cache_read": 27355, "duration_ms": 293494}\n')
+  // today's ledger: one Antigravity run, one Cursor run, and a row from long ago that is not today's
+  const today = new Date(T0 + 74 * SECOND).toISOString()
+  sh.files.set(
+    '/Users/x/.claude/metrics/consult-ledger.jsonl',
+    [
+      JSON.stringify({ kind: 'consult_call', ts: today, pool: 'agy', tokens_total: 51_474 }),
+      JSON.stringify({ kind: 'consult_call', ts: today, pool: 'cursor-capped', tokens_total: 32_398 }),
+      JSON.stringify({ kind: 'consult_call', ts: '2020-01-01T00:00:00Z', pool: 'cursor-free', tokens_total: 999_999 }),
+      JSON.stringify({ kind: 'consult_outcome', ts: today, findings: 3 }),
+    ].join('\n'),
+  )
+  await notify($, 'tu-g')
+  ;[a] = await rows(it)
+  expect(a).toMatchObject({ status: 'done', tokens: 51_474 })
+  expect(a!.external).toMatchObject({ tokens: 51_474, exit: 0 })
+  expect(it.state.get('usage')).toMatchObject({ cursor: 32_398, antigravity: 51_474 })
+  p = await pane($, 'desktop')
+  // done, the seat is a summary row carrying its tokens
+  expect(p.alts.some(t => t.includes('Antigravity · gemini-4-neon-high · 1 done · 51k · 1:14'))).toBe(true)
+  expect(p.alts.some(t => t.includes('Cursor today 32k tokens · Antigravity today 51k tokens'))).toBe(true)
+  // the header's own Tokens tile now counts the seat
+  expect(p.alts.some(t => t.startsWith('1 agent · 51k'))).toBe(true)
+  await p.done()
+  await it.clock.settle()
+})
+
+test('launch: a Codex run that ends reads its tokens and the account limits from its own session log', async ($, on) => {
+  const it = world(on)
+  const sh = shell(on)
+  await $.session.start({ cwd: '/t' } as never)
+  sh.bgId = 'bcx'
+  await bash($, `timeout -k 10 840 codex exec --json -c 'model="gpt-6.2-sol"' -c 'model_reasoning_effort="low"' "go" < /dev/null > e.jsonl`, { run_in_background: true, tool_use_id: 'tu-cx' })
+  let [a] = await rows(it)
+  // the -c pin is read: sol at low, not the config's default
+  expect(a).toMatchObject({ type: 'codex:exec', model: 'gpt-6.2-sol', effort: 'low' })
+  await it.clock.advance(16 * SECOND)
+  const d = new Date(T0)
+  const two = (n: number): string => String(n).padStart(2, '0')
+  const dir = `/Users/x/.codex/sessions/${d.getFullYear()}/${two(d.getMonth() + 1)}/${two(d.getDate())}`
+  const stamp = `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())}`
+  sh.files.set(
+    `${dir}/rollout-${stamp}-01a2.jsonl`,
+    '{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":22629,"output_tokens":7,"total_tokens":22636},"last_token_usage":{"total_tokens":5}},"rate_limits":{"primary":{"used_percent":20.0,"window_minutes":300},"secondary":{"used_percent":37.0,"window_minutes":10080}}}}\n',
+  )
+  await notify($, 'tu-cx')
+  ;[a] = await rows(it)
+  expect(a).toMatchObject({ status: 'done', tokens: 22_636 })
+  expect(a!.external!.log).toBe(`rollout-${stamp}-01a2.jsonl`)
+  expect(it.state.get('usage')).toMatchObject({ codex: { primary: 20, secondary: 37 } })
+  const p = await pane($, 'desktop')
+  expect(p.alts.some(t => t.includes('Codex · gpt-6.2-sol · low · 1 done · 23k · 0:16'))).toBe(true)
+  expect(p.alts.some(t => t.includes('Codex limit 5h 20% · 7d 37%'))).toBe(true)
+  await p.done()
+  await it.clock.settle()
+})
+
+test('desktop: one pane render stays inside its markup budget; the newest cards are drawn and the rest counted', async ($, on) => {
+  // 2026-11-24: the live pane stopped taking renders, buttons included, at its 20th card (269,470 characters)
+  const it = world(on)
+  shell(on)
+  await $.session.start({ cwd: '/t' } as never)
+
+  for (let i = 0; i < 30; i += 1) {
+    await bash($, `codex exec "explain ${i}"`, { tool_use_id: `tu-r${i}`, description: `run ${i}` })
+  }
+
+  expect((await rows(it)).length).toBe(30)
+  const first = await pane($, 'desktop', 120)
+  await first.press('each')
+  await first.done()
+  const p = await pane($, 'desktop', 120)
+  const chars = p.svgs.reduce((n, one) => n + String(one.props.source ?? '').length, 0)
+  expect(chars).toBeLessThanOrEqual(200_000)
+  // the header and at least ten cards, newest first, and a count of the ones left out
+  expect(p.svgs.length).toBeGreaterThan(10)
+  expect(p.svgs.length).toBeLessThan(31)
+  expect(p.alts[1]).toContain('run 29')
+  expect(p.texts).toContain(`+${30 - (p.svgs.length - 1)} more`)
+  expect(p.buttons.some(b => String(b.props.label ?? '').includes('Finished · 30'))).toBe(true)
+  await p.done()
+})
+
+const dayDir = (root: string, t: number): string => {
+  const d = new Date(t)
+  const two = (n: number): string => String(n).padStart(2, '0')
+
+  return `${root}/sessions/${d.getFullYear()}/${two(d.getMonth() + 1)}/${two(d.getDate())}`
+}
+const stampOf = (t: number): string => {
+  const d = new Date(t)
+  const two = (n: number): string => String(n).padStart(2, '0')
+
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}T${two(d.getHours())}-${two(d.getMinutes())}-${two(d.getSeconds())}`
+}
+const tokenLine = (total: number, p: number, s: number): string =>
+  `{"type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"total_tokens":${total}},"last_token_usage":{"total_tokens":5}},"rate_limits":{"primary":{"used_percent":${p},"window_minutes":300},"secondary":{"used_percent":${s},"window_minutes":10080}}}}\n`
+
+test('launch: an ephemeral or resumed Codex run never borrows the session log of a neighbouring run', async ($, on) => {
+  const it = world(on)
+  const sh = shell(on)
+  await $.session.start({ cwd: '/t' } as never)
+  sh.bgId = 'bce'
+  await bash($, 'timeout 600 codex exec --ephemeral "go" < /dev/null', { run_in_background: true, tool_use_id: 'tu-e' })
+  await it.clock.advance(5 * SECOND)
+  // another run's log, started inside this one's window
+  sh.files.set(`${dayDir('/Users/x/.codex', T0)}/rollout-${stampOf(T0 + 2 * SECOND)}-zz.jsonl`, tokenLine(99_000, 20, 37))
+  await notify($, 'tu-e')
+  const [a] = await rows(it)
+  expect(a).toMatchObject({ status: 'done', tokens: 0 })
+  expect(a!.external!.log).toBeUndefined()
+  expect(a!.external!.tokens).toBeUndefined()
+  // the account's limits are still read, from the log written last
+  expect(it.state.get('usage')).toMatchObject({ codex: { primary: 20, secondary: 37 } })
+  await it.clock.settle()
+})
+
+test('launch: a Codex run under its own CODEX_HOME is read from there; the limits come from the log written last', async ($, on) => {
+  const it = world(on)
+  const sh = shell(on)
+  await $.session.start({ cwd: '/t' } as never)
+  sh.bgId = 'bch'
+  await bash($, 'CODEX_HOME=/tmp/cx timeout 600 codex exec "go" < /dev/null', { run_in_background: true, tool_use_id: 'tu-h' })
+  await it.clock.advance(5 * SECOND)
+  sh.files.set(`${dayDir('/tmp/cx', T0)}/rollout-${stampOf(T0)}-aa.jsonl`, tokenLine(4_321, 11, 22))
+  // in the default home: an older-started log written just now, and a newer-started one written earlier
+  const old = `${dayDir('/Users/x/.codex', T0)}/rollout-${stampOf(T0 - 3600 * SECOND)}-old.jsonl`
+  const young = `${dayDir('/Users/x/.codex', T0)}/rollout-${stampOf(T0 - 60 * SECOND)}-new.jsonl`
+  sh.files.set(old, tokenLine(1, 55, 66))
+  sh.files.set(young, tokenLine(1, 1, 2))
+  sh.mtimes.set(old, 9_000)
+  sh.mtimes.set(young, 1_000)
+  await notify($, 'tu-h')
+  const [a] = await rows(it)
+  expect(a).toMatchObject({ status: 'done', tokens: 4_321 })
+  expect(a!.external!.log).toBe(`rollout-${stampOf(T0)}-aa.jsonl`)
+  // this run's own snapshot is the freshest reading of the account
+  expect(it.state.get('usage')).toMatchObject({ codex: { primary: 11, secondary: 22 } })
+  // a later launch reads again, with no snapshot of its own: the log written last, not the one started last
+  sh.bgId = 'bci'
+  await bash($, 'timeout 600 codex exec "again" < /dev/null', { run_in_background: true, tool_use_id: 'tu-i' })
+  expect(it.state.get('usage')).toMatchObject({ codex: { primary: 55, secondary: 66 } })
+  await it.clock.settle()
+})
+
+for (const surface of SURFACES) {
+  test(`${surface}: finished runs read as one row per vendor and model; a failed run keeps its card; Each card lists them all`, async ($, on) => {
+    const it = world(on)
+    shell(on)
+    await $.session.start({ cwd: '/t' } as never)
+    for (let i = 0; i < 25; i += 1) {
+      await bash($, `codex exec --ephemeral -c 'model="gpt-6.2-sol"' -c 'model_reasoning_effort="low"' "Reply ok" </dev/null`, { tool_use_id: `tu-s${i}`, description: `Size check run ${i}` })
+    }
+    await spawn($, 'Explore', 'map the tests')
+    await complete($, 'id-Explore', 'error')
+    expect((await rows(it)).length).toBe(26)
+    let p = await pane($, surface)
+    // one summary row for 25 runs, and the failed subagent's own card
+    expect(p.all).toContain('Codex · gpt-6.2-sol · low · 25 done')
+    expect(p.all).not.toContain('Size check run 24')
+    expect(p.all).toContain('map the tests')
+    if (surface === 'desktop') {
+      // the header, the failed card, the summary block: three drawings, not 27
+      expect(p.svgs.length).toBe(3)
+      expect(p.alts[2]).toMatch(/^Finished: Codex · gpt-6\.2-sol · low · 25 done · /)
+      expect(p.buttons.find(b => b.props.key === 'compact')?.props.variant).toBe('secondary')
+    }
+    expect(p.buttons.some(b => String(b.props.label ?? '').includes('Finished · 26'))).toBe(true)
+    // Each card sits beside the Finished toggle; spread across the row it landed past the drawings' right edge
+    const doneRow = p.boxes.find(b => b.props.key === 'done-row')
+    expect(doneRow).toBeDefined()
+    expect(doneRow?.props.justifyContent).toBeUndefined()
+    expect(doneRow?.props.gap).toBe('md')
+    await p.press('each')
+    await p.done()
+    p = await pane($, surface)
+    expect(p.all).toContain('Size check run 24')
+    expect(p.all).not.toContain('25 done')
+    expect(p.buttons.find(b => b.props.key === 'each')?.props.label).toBe('Summary')
+    await p.press('each')
+    await p.press('done')
+    await p.done()
+    // folded, neither the summary nor its toggle
+    p = await pane($, surface)
+    expect(p.all).not.toContain('25 done')
+    expect(p.buttons.some(b => b.props.key === 'each')).toBe(false)
+    await p.done()
+  })
+}

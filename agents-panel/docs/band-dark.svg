@@ -1,6 +1,14 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="560" height="22" viewBox="0 0 560 22"><style>
-.t{fill:#1f1f1f}.s{fill:#6b6b68}.m{fill:#9a9a96}.k{fill:#ecebe8}.ln{stroke:#e4e4e1}.tile{fill:#f4f3f0}
-.t{fill:#ececec}.s{fill:#a8a8a4}.m{fill:#7d7d79}.k{fill:#2c2c2b}.ln{stroke:#333331}.tile{fill:#262625}
+.t{fill:#1f1f1f}.s{fill:#6b6b68}.m{fill:#9a9a96}.k{fill:#d9d8d3}.ln{stroke:#e4e4e1}.tile{fill:#f4f3f0;stroke:#e4e4e1}
+.t{fill:#ececec}.s{fill:#a8a8a4}.m{fill:#7d7d79}.k{fill:#40403e}.ln{stroke:#333331}.tile{fill:#262625;stroke:#333331}
+.cd{fill:#f4f3f0;stroke:#e4e4e1}.bf{fill:#286797}.bw{fill:#b26a00}.tk{fill:#9a9a96}
+.st-run{fill:#245e8a}.st-ok{fill:#21653d}.st-bad{fill:#992e27}.st-warn{fill:#805300}
+.pb-codex{fill:#e2ebf5}.pt-codex{fill:#284f72}.pb-cursor{fill:#ddf1ec}.pt-cursor{fill:#1f5e52}
+.pb-antigravity{fill:#ece8fa}.pt-antigravity{fill:#4b3a99}.pb-claude{fill:#f8e9e1}.pt-claude{fill:#8a3f1f}
+.cd{fill:#262625;stroke:#333331}.bf{fill:#78b7ea}.bw{fill:#f1bf67}.tk{fill:#7d7d79}
+.st-run{fill:#8ac5f4}.st-ok{fill:#8dd4ab}.st-bad{fill:#ffada5}.st-warn{fill:#f1bf67}
+.pb-codex{fill:#303e51}.pt-codex{fill:#c1d8f1}.pb-cursor{fill:#1f3d38}.pt-cursor{fill:#a5e0d2}
+.pb-antigravity{fill:#38305a}.pt-antigravity{fill:#cfc6f7}.pb-claude{fill:#4a2e22}.pt-claude{fill:#f2c2ab}
 .live{animation:apulse 1.6s ease-in-out infinite}@keyframes apulse{50%{opacity:.3}}
 @media (prefers-reduced-motion: reduce){.live{animation:none}}
 </style><style>

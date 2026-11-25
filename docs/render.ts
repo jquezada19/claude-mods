@@ -6,7 +6,8 @@ import { dirname, join } from 'node:path'
 
 import type { AgentRun } from '../agents-panel/types'
 import { costumeOf, totals } from '../agents-panel/hooks/agents'
-import { bandSvg, cardSvg, headerSvg, stripSvg } from '../agents-panel/hooks/draw'
+import { bandSvg, cardHeight, cardSvg, finishedGroups, finishedRows, finishedSvg, headerHeight, headerSvg, stripSvg } from '../agents-panel/hooks/draw'
+import { dayStart } from '../agents-panel/hooks/usage'
 import type { Costume } from '../agents-panel/hooks/sprite'
 import { CLAWD_CSS, clawd } from '../agents-panel/hooks/sprite'
 import type { MascotKey } from '../ticket-phase/hooks/mascot'
@@ -73,18 +74,51 @@ const run = (id: string, over: Partial<AgentRun>): AgentRun => ({
 const SESSION = { model: 'claude-opus-5-5', window: 200_000 }
 const agents: AgentRun[] = [
   run('Find where the band row is drawn', { type: 'Explore', model: 'claude-haiku-5-5', startedAt: NOW - 134_000, contextTokens: 41_000, tokens: 118_000 }),
-  run('Plan the settings migration', { type: 'Plan', effort: 'high', startedAt: NOW - 71_000, contextTokens: 64_000, tokens: 152_000 }),
+  run('Plan the settings migration', {
+    type: 'Plan',
+    effort: 'high',
+    startedAt: NOW - 71_000,
+    contextTokens: 64_000,
+    tokens: 152_000,
+    detail: { task: 'Plan the move of the settings store to the new schema, keeping every existing key readable until the next release', tools: ['Read src/settings/store.ts', 'Grep "migrate" in src/'] },
+  }),
   run('Second-opinion review of the diff', { type: 'codex:codex-rescue', model: 'gpt-5.4', startedAt: NOW - 48_000, contextTokens: 0, tokens: 0, steps: 0 }),
   run('Audit README example rows', { variant: 2, status: 'done', startedAt: NOW - 400_000, endedAt: NOW - 210_000, contextTokens: 82_000, tokens: 196_000 }),
   run('Check the cache countdown', { type: 'claude-code-guide', model: 'claude-sonnet-5-5', status: 'failed', startedAt: NOW - 500_000, endedAt: NOW - 470_000, contextTokens: 12_000, tokens: 30_000 }),
 ]
+/** The external seats a Bash call starts: a Codex run and buddy seats on the Cursor and Antigravity CLIs. */
+const seat = (id: string, type: string, model: string, over: Partial<AgentRun>, external: Partial<NonNullable<AgentRun['external']>>): AgentRun =>
+  run(id, { type, model, steps: 0, external: { doneFile: null, deadline: null, ...external }, ...over })
+const seats: AgentRun[] = [
+  seat('Design review of the routing change', 'codex:exec', 'gpt-6.2-astra', { effort: 'high', startedAt: NOW - 74_000 }, { capMs: 840_000 }),
+  seat('Ask Gemini for design input on the pane', 'buddy:agy-gemini-4-neon-high', 'agy-gemini-4-neon-high', { startedAt: NOW - 782_000 }, { capMs: 900_000 }),
+  seat('Ask Kimi for design input on the pane', 'buddy:kimi-k3-high', 'kimi-k3-high', { status: 'done', startedAt: NOW - 300_000, endedAt: NOW - 264_000, tokens: 32_398 }, { capMs: 600_000, tokens: 32_398, exit: 0 }),
+  seat('Review the launcher sandbox profile', 'buddy:grok-4.7-high-fast', 'grok-4.7-high-fast', { status: 'failed', startedAt: NOW - 2_000_000, endedAt: NOW - 1_100_000 }, { capMs: 900_000, exit: 124 }),
+]
+// short Codex runs that ended done: in the pane they fold into one summary row
+const quick = [0, 1, 2, 3, 4].map(i =>
+  seat(`Size check run ${i}`, 'codex:exec', 'gpt-6.2-sol', { effort: 'low', status: 'done', startedAt: NOW - 900_000 + i * 30_000, endedAt: NOW - 884_000 + i * 30_000 }, {}),
+)
+const USAGE = { day: dayStart(NOW), codex: { primary: 20, secondary: 37 }, cursor: 182_000, antigravity: 87_000 }
 const running = agents.filter(a => a.status === 'running')
 write('agents-panel/docs/band.svg', bandSvg(560, running, NOW))
 
-const W = 420
-const t = totals(agents, NOW)
-const cards = agents.map((a, i): [number, number, string] => [0, 52 + i * 70, cardSvg(W, a, NOW, SESSION)])
-write('agents-panel/docs/pane.svg', stack(W, 52 + agents.length * 70, [[0, 0, headerSvg(W, t)], ...cards]))
+const W = 560
+// running first, as the pane lists them; a card is taller only while a bar runs under its readout, and
+// taller again with its details open (the Plan card); finished runs that ended done are one summary
+// block, one row per vendor and model, and the ones that did not keep their cards above it
+const all = [...agents, ...seats, ...quick]
+const t = totals(all, NOW)
+const live = all.filter(a => a.status === 'running')
+const { groups, attention } = finishedGroups(all.filter(a => a.status !== 'running').sort((a, b) => (b.endedAt ?? 0) - (a.endedAt ?? 0)), NOW)
+const shown = [...live, ...attention]
+const isOpen = (a: AgentRun): boolean => a.detail !== undefined
+const headH = headerHeight(W, USAGE, NOW) + 8
+const tops = shown.reduce<number[]>((ys, a, i) => [...ys, (ys[i - 1] ?? headH) + (i === 0 ? 0 : cardHeight(shown[i - 1]!, NOW, SESSION, W, isOpen(shown[i - 1]!)))], [])
+const cards = shown.map((a, i): [number, number, string] => [0, tops[i]!, cardSvg(W, a, NOW, SESSION, isOpen(a))])
+const sumTop = tops[tops.length - 1]! + cardHeight(shown[shown.length - 1]!, NOW, SESSION, W, isOpen(shown[shown.length - 1]!))
+const paneH = sumTop + finishedRows(groups) * 36 + 8
+write('agents-panel/docs/pane.svg', stack(W, paneH, [[0, 0, headerSvg(W, t, USAGE, NOW)], ...cards, [0, sumTop, finishedSvg(W, groups)]]))
 write('agents-panel/docs/pane-collapsed.svg', stripSvg(W, agents, t))
 
 const COSTUMES: [Costume, string][] = [

@@ -482,7 +482,7 @@ export const CLAWDS: readonly Costume[] = ['plain', 'pirate', 'detective', 'engi
 /**
  * The costume for an agent type, any `<plugin>:` prefix removed: every agent of the
  * codex plugin is the Codex bot, a Kimi buddy seat (`buddy:kimi-…`) the panda, a
- * Gemini one the rainbow droplet, a Grok one the ball, a Composer one the cube, a
+ * Gemini one (any type naming gemini, `agy-gemini-…` included) the rainbow droplet, a Grok one the ball, a Composer one the cube, a
  * DeepSeek one the whale. Any
  * other subagent takes the Clawd costume its spawn order (`variant`) points at, so a
  * session's agents show every one; with no variant it is the plain Clawd.
@@ -492,7 +492,8 @@ export const costumeOf = (type: string, variant?: number): Costume => {
 
   if (type.startsWith('codex:') || bare === 'codex-rescue') return 'codex'
   if (type.startsWith('buddy:') && bare.startsWith('kimi')) return 'panda'
-  if (type.startsWith('buddy:') && bare.startsWith('gemini')) return 'gemini'
+  // any launcher's Gemini seat: buddy-run's `gemini-…`, the Antigravity CLI's `agy-gemini-…`
+  if (/gemini/i.test(bare)) return 'gemini'
   if (type.startsWith('buddy:') && /^(cursor-)?grok/.test(bare)) return 'grok'
   if (type.startsWith('buddy:') && bare.startsWith('composer')) return 'composer'
   if (type.startsWith('buddy:') && bare.startsWith('deepseek')) return 'deepseek'
@@ -546,8 +547,64 @@ export const finishRow = (list: AgentRun[], id: string, status: 'done' | 'failed
 
 export const elapsed = (row: AgentRun, at: number): number => (row.endedAt ?? Math.max(at, row.startedAt)) - row.startedAt
 
-/** Whether the row's token figures mean anything: an external or lost row never reports a request. */
-export const reportsTokens = (row: AgentRun): boolean => row.external === undefined && row.status !== 'lost'
+/**
+ * Whether the row's token figures mean anything: a lost row never reported a request, and an
+ * external one reports none until its done file or session log has been read at its end.
+ */
+export const reportsTokens = (row: AgentRun): boolean =>
+  row.status !== 'lost' && (row.external === undefined || row.external.tokens !== undefined)
+
+/** What an external row's end left behind (tokens, exit code, the log read), laid onto the row; any other row is untouched. */
+export const harvestRow = (list: AgentRun[], id: string, found: { tokens?: number; exit?: number; log?: string }): AgentRun[] => {
+  const i = list.findIndex(a => a.id === id)
+  const a = list[i]
+
+  if (a === undefined || a.external === undefined || Object.keys(found).length === 0) {
+    return list
+  }
+
+  return replaceAt(list, i, { ...a, tokens: found.tokens ?? a.tokens, external: { ...a.external, ...found } })
+}
+
+/** Whose model a row runs on: what the card's pill names. */
+export type Backend = 'claude' | 'codex' | 'cursor' | 'antigravity'
+
+export const backendOf = (row: AgentRun): Backend =>
+  row.type.startsWith('codex:') || row.codex !== undefined
+    ? 'codex'
+    : row.external === undefined
+      ? 'claude'
+      : row.model.startsWith('agy-')
+        ? 'antigravity'
+        : 'cursor'
+
+/** How far through its own timeout a running external row is, 0 to 1; null when it has none or is over. */
+export const capRatio = (row: AgentRun, at: number): number | null => {
+  const cap = row.external?.capMs
+
+  return row.status !== 'running' || cap === undefined || cap <= 0 ? null : Math.min(1, Math.max(0, elapsed(row, at) / cap))
+}
+
+/** The row's state as a word: what it is doing, or how it ended. */
+export const statusWord = (row: AgentRun): string => {
+  if (row.status === 'running') {
+    return (row.pending ?? []).length > 0
+      ? 'Awaiting approval'
+      : row.engineStatus === 'waiting'
+        ? 'Waiting'
+        : row.engineStatus === 'idle'
+          ? 'Idle'
+          : row.engineStatus === 'pending'
+            ? 'Pending'
+            : 'Running'
+  }
+
+  if (row.status === 'failed') {
+    return row.external?.exit === 124 ? 'Timed out' : 'Failed'
+  }
+
+  return row.status === 'done' ? 'Done' : row.status === 'stopped' ? 'Stopped' : 'Lost'
+}
 
 /** Agents, their summed tokens (null when no row reports any: unknown, not 0) and the span they cover. */
 export type Totals = { agents: number; tokens: number | null; time: number }

@@ -13,8 +13,9 @@ DRAW = os.path.join("hooks", "draw.ts")
 SPRITE = os.path.join("hooks", "sprite.ts")
 REGISTER = os.path.join("hooks", "register.tsx")
 LAUNCHES = os.path.join("hooks", "launches.ts")
+USAGE = os.path.join("hooks", "usage.ts")
 # The suite's size at the time of writing; a mutant that fails everything is the module breaking.
-SUITE = 114
+SUITE = 160
 
 MUTANTS = [
     ("fallback-lifetime", AGENTS, 'const seen = turnId === undefined ? a.steps : (a.turns?.[turnId] ?? 0)', 'const seen = a.steps'),
@@ -35,7 +36,7 @@ MUTANTS = [
     ("early-checks-dropped", REGISTER, "              ...(kept.checks === undefined ? {} : { checks: kept.checks }),\n", ""),
     ("step-keeps-awaiting", AGENTS, "const { contextIsSum: _sum, ...measured } = settled(withoutMissing(a))", "const { contextIsSum: _sum, ...measured } = withoutEngineStatus(withoutMissing(a))"),
     ("end-keeps-awaiting", AGENTS, "    ...settled(a),\n    status: reason === 'answer'", "    ...withoutEngineStatus(a),\n    status: reason === 'answer'"),
-    ("badge-hidden", DRAW, "const awaiting = (row.pending ?? []).length > 0 ? ' · awaiting approval' : ''", "const awaiting = ''"),
+    ("badge-hidden", AGENTS, "    return (row.pending ?? []).length > 0\n      ? 'Awaiting approval'", "    return false\n      ? 'Awaiting approval'"),
     ("command-args-shown", AGENTS, "const shown = key === 'command' ? programOf(value)", "const shown = key === 'command' ? value"),
     ("url-query-shown", AGENTS, "key === 'url' ? urlShape(value)", "key === 'url' ? value"),
     ("detail-needs-usage", REGISTER, "if (sum === null && tools.length === 0 && stop !== 'max_tokens') {", "if (sum === null) {"),
@@ -134,7 +135,7 @@ MUTANTS = [
     ("composer-off", AGENTS, "  if (type.startsWith('buddy:') && bare.startsWith('composer')) return 'composer'\n", ""),
     ("grid-fixed-offset", SPRITE, "const left = Math.floor((30 - width) / 2)", "const left = 5"),
     ("grok-off", AGENTS, "  if (type.startsWith('buddy:') && /^(cursor-)?grok/.test(bare)) return 'grok'\n", ""),
-    ("gemini-off", AGENTS, "  if (type.startsWith('buddy:') && bare.startsWith('gemini')) return 'gemini'\n", ""),
+    ("gemini-off", AGENTS, "  if (/gemini/i.test(bare)) return 'gemini'\n", ""),
     ("panda-off", AGENTS, "  if (type.startsWith('buddy:') && bare.startsWith('kimi')) return 'panda'\n", ""),
     ("deadline-ignored", REGISTER, "} else if (x.deadline !== null && at > x.deadline) {", "} else if (false) {"),
     ("meta-status-ignored", REGISTER, "return doneStatus(await $.fs.read(doneFile))", "return 'done'"),
@@ -142,7 +143,7 @@ MUTANTS = [
     # error-is-done retired 2026-10-12: equivalent since the ghost-row guard fails every error without a task id
     # first; the foreground test still pins an errored call to failed through that guard.
     ("error-guard-off", REGISTER, "if (ran.deny !== undefined || (ran.isError === true && taskId === '')) {", "if (ran.deny !== undefined) {"),
-    ("codex-in-subagent", REGISTER, ".filter(l => e.agentId === undefined || !l.type.startsWith('codex:'))", ""),
+    ("codex-in-subagent", REGISTER, ".filter(l => e.agentId === undefined || !isCodex(l))", ""),
     ("auto-background-closed", REGISTER, "const isBackground = e.run_in_background === true || taskId !== ''", "const isBackground = e.run_in_background === true"),
     ("notification-ignored", REGISTER, "const ends = e.text.includes('<task-notification>') ? parseNotifications(e.text) : []", "const ends: { toolUseId: string; status: string }[] = []"),
     ("notification-over-meta", REGISTER, "const status = (await landed($, a.external.doneFile)) ?? (end.status === 'completed' ? 'done' : 'failed')", "const status = end.status === 'completed' ? 'done' : 'failed'"),
@@ -164,6 +165,50 @@ MUTANTS = [
     ("mention-is-a-run", LAUNCHES, "return READS_CLI.test(args) || NAMES_IT.test(head)", "return READS_CLI.test(args)"),
     ("help-flag-in-quotes", LAUNCHES, "const tail = masked.slice(end)", "const tail = command.slice(end)"),
     ("unknown-tokens-zero", AGENTS, "tokens: known.length === 0 ? null :", "tokens:"),
+    # 0.7.0: the redrawn card, seat tokens and the usage strip
+    ("cap-ratio-off", AGENTS, "  return row.status !== 'running' || cap === undefined || cap <= 0 ? null", "  return true ? null"),
+    ("warn-at-90", DRAW, "const WARN_AT = 0.8", "const WARN_AT = 0.9"),
+    # 2026-11-24: no dash for an unknown count; a context window warns like a timeout; one meter colour
+    ("dash-for-unknown", DRAW, "...(tokens === null ? [] : [fmtTokens(tokens)])", "tokens === null ? '—' : fmtTokens(tokens)"),
+    ("context-never-warns", DRAW, "const isWarn = pct !== null && pct >= WARN_AT * 100", "const isWarn = false"),
+    ("tile-dash", DRAW, "t.tokens === null ? tile(1, 'Tokens', 'Not reported', true) : tile(1, 'Tokens', fmtTokens(t.tokens))", "tile(1, 'Tokens', t.tokens === null ? '—' : fmtTokens(t.tokens))"),
+    ("timed-out-word", AGENTS, "row.external?.exit === 124 ? 'Timed out' : 'Failed'", "'Failed'"),
+    ("reads-script-off", LAUNCHES, "data[afterName(m, 'buddy-run.sh')] || READS_SCRIPT.test(headOf(command, m.index))", "data[afterName(m, 'buddy-run.sh')]"),
+    ("model-id-unchecked", LAUNCHES, "      if (!MODEL_ID.test(seat.model)) {\n        continue\n      }\n", ""),
+    ("c-model-ignored", LAUNCHES, " ?? pinned()", ""),
+    # 2026-11-24 (0.8.0): finished runs summarised by vendor and model; details inside the card; a padded Collapse
+    ("summary-off", REGISTER, "const isEach = p.showsEachDone === true", "const isEach = true"),
+    ("attention-folded", DRAW, "    if (a.status !== 'done') {\n      continue\n    }\n\n    const backend = backendOf(a)", "    const backend = backendOf(a)"),
+    ("group-ignores-model", DRAW, "const key = `${backend}\\u0000${meta}`", "const key = backend"),
+    ("group-sums-unreported", DRAW, "tokens: reportsTokens(a) ? (g.tokens ?? 0) + a.tokens : g.tokens", "tokens: (g.tokens ?? 0) + a.tokens"),
+    ("summary-hairline-under-last", DRAW, "(i < n - 1 ? `<line class=\"ln\"", "(true ? `<line class=\"ln\""),
+    ("details-outside-card", DRAW, "const lines = isOpen ? detailLines(row, W) : []", "const lines: { text: string; cls: string }[] = []"),
+    ("wrap-last-uncut", DRAW, "fitText(`${lines[maxLines - 1]} ${lines[maxLines]}`, size, maxW)]", "lines[maxLines - 1]!]"),
+    ("collapse-plain", REGISTER, '<Button key="compact" label={compactLabel} variant="secondary" onPress={compactPress} />', '<Button key="compact" label={compactLabel} plain onPress={compactPress} />'),
+    # 2026-11-24: a pgrep pattern, a heredoc note and a test file's strings each drew a Codex card
+    ("stale-window-kept", USAGE, "resetsAt !== undefined && at >= resetsAt ? 'reset' : `${Math.round(used)}%`", "`${Math.round(used)}%`"),
+    ("window-named-by-place", USAGE, "minutes === undefined || minutes <= 0 ? fallback :", "true ? fallback :"),
+    ("null-window-borrows", USAGE, "  if (!rest.startsWith('{')) {\n    return null\n  }\n", ""),
+    ("one-window-not-drawn", USAGE, "    if (first !== undefined) {", "    if (first !== undefined && second !== undefined) {"),
+    ("ignore-config-unread", LAUNCHES, "...(flags.ignoresConfig === true ? { ignoresConfig: true as const } : {}),", ""),
+    ("pane-unbounded", DRAW, "    if (n > 0 && used + size > budget) {\n      break\n    }\n", ""),
+    ("continuation-ends-command", LAUNCHES, "raw.replace(/\\\\\\n/g, '  ')", "raw"),
+    ("exec-server-is-exec", LAUNCHES, "(exec|review)(?![\\w-])/g", "(exec|review)\\b/g"),
+    ("effort-from-prompt", LAUNCHES, "at(/(?:^|\\s)--effort(?:=|\\s+)/) ?? pinnedEffort()", "at(/(?:^|\\s)--effort(?:=|\\s+)/) ?? /-c\\s+['\"]?model_reasoning_effort\\s*=\\s*\\\\?[\"']?([a-z]+)/.exec(args)?.[1]"),
+    ("no-log-reads-neighbour", REGISTER, "a.type.startsWith('codex:') && x.noLog !== true", "a.type.startsWith('codex:')"),
+    ("codex-home-ignored", REGISTER, "const home = x.codexHome ?? codexHomeOf(", "const home = codexHomeOf("),
+    ("limits-from-newest-named", USAGE, "(b.mtimeMs ?? 0) - (a.mtimeMs ?? 0) || ", ""),
+    ("midnight-wipes-codex", USAGE, "...(prev !== null && hasLiveWindow(prev.codex, at) ? { codex: prev.codex! } : {})", ""),
+    ("codex-hidden-past-midnight", DRAW, "(isToday || hasLiveWindow(usage.codex, at))", "isToday"),
+    ("resume-has-a-log", LAUNCHES, " || /^\\s+(?:-\\S+\\s+)*resume(?=\\s|$)/.test(live)", ""),
+    ("quoted-mention-is-a-run", LAUNCHES, "  const data = dataMask(command)\n", "  const data: boolean[] = []\n"),
+    ("tokens-not-harvested", REGISTER, "    await queue($, l => harvestRow(l, id, found))", "    await queue($, l => l)"),
+    ("ledger-any-day", USAGE, "!(Date.parse(r.ts) >= since)", "false"),
+    ("usage-stale-day", DRAW, "const isToday = usage.day === dayStart(at)", "const isToday = true"),
+    ("total-is-last-request", USAGE, ".split('\"last_token_usage\"')[0]", ""),
+    # 2026-11-25 live check: Each card was spread to the pane's far edge, past the drawings' right edge
+    ("each-toggle-spread", REGISTER, '<Box key="done-row" flexDirection="row" gap="md">', '<Box key="done-row" flexDirection="row" gap="md" justifyContent="space-between">'),
+    ("each-toggle-no-gap", REGISTER, '<Box key="done-row" flexDirection="row" gap="md">', '<Box key="done-row" flexDirection="row">'),
 ]
 unknown = set(sys.argv[1:]) - {m[0] for m in MUTANTS}
 if unknown:
@@ -172,11 +217,20 @@ if unknown:
 # A clean run first: a mutant can only be judged against a suite that passes as it is.
 _b = subprocess.run(["claude", "plugin", "test", "."], cwd=SRC, capture_output=True, text=True, timeout=300)
 _bo = _b.stdout + _b.stderr
-_bf = [l for l in _bo.splitlines() if l.strip().endswith(" fail")]
+# MUTATE_IGNORE="<part of a test's name>" sets ONE named test aside, for a machine too loaded for a
+# timing test (2026-11-24: the 201-spawn test ran 6 s against its 5 s limit at load average 11, so no
+# baseline could pass). Off by default. When set, that test's failures are not counted in the baseline
+# or in any verdict, so it can neither block the run nor make a mutant look detected, and every line
+# of the report says so. A mutant only that test would catch then reads NOT DETECTED: rerun it unloaded.
+IGNORE = os.environ.get("MUTATE_IGNORE", "").strip()
+def _fails(out):
+    """The failed tests' names, without the one set aside."""
+    return [l for l in out.splitlines() if l.startswith("(fail)") and not (IGNORE and IGNORE in l)]
 _bp = [l for l in _bo.splitlines() if l.strip().endswith(" pass")]
-if _b.returncode != 0 or not _bf or int(_bf[-1].split()[0]) != 0 or not _bp or int(_bp[-1].split()[0]) == 0:
-    print("baseline: the clean suite does not pass; no mutant can be judged"); sys.exit(1)
-print(f"baseline: {int(_bp[-1].split()[0])} pass, 0 fail")
+_bfail = _fails(_bo)
+if "did not load" in _bo or _bfail or not _bp or int(_bp[-1].split()[0]) == 0 or (_b.returncode != 0 and not IGNORE):
+    print("baseline: the clean suite does not pass; no mutant can be judged" + (f" (failing: {_bfail[:3]})" if _bfail else "")); sys.exit(1)
+print(f"baseline: {int(_bp[-1].split()[0])} pass, 0 fail" + (f" — SET ASIDE by MUTATE_IGNORE: tests named '{IGNORE}'" if IGNORE else ""))
 ran = 0
 bad = 0
 for name, file, old, new in [m for m in MUTANTS if m[0] in set(sys.argv[1:]) or not sys.argv[1:]]:
@@ -193,7 +247,8 @@ for name, file, old, new in [m for m in MUTANTS if m[0] in set(sys.argv[1:]) or 
     out = r.stdout + r.stderr
     fails = [l for l in out.splitlines() if l.strip().endswith(" fail")]
     passes = [l for l in out.splitlines() if l.strip().endswith(" pass")]
-    n_fail = int(fails[-1].split()[0]) if fails else -1
+    # with a test set aside, the count is of the named failures left; without, the suite's own total as before
+    n_fail = (len(_fails(out)) if fails else -1) if IGNORE else (int(fails[-1].split()[0]) if fails else -1)
     n_pass = int(passes[-1].split()[0]) if passes else -1
     verdict = "DETECTED" if n_fail > 0 and n_pass > 0 and "did not load" not in out else ("NOT DETECTED" if n_fail == 0 else "INCONCLUSIVE (module broke)")
     if verdict != "DETECTED": bad += 1

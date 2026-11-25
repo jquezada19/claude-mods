@@ -1,5 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="560" height="22" viewBox="0 0 560 22"><style>
-.t{fill:#1f1f1f}.s{fill:#6b6b68}.m{fill:#9a9a96}.k{fill:#ecebe8}.ln{stroke:#e4e4e1}.tile{fill:#f4f3f0}
+.t{fill:#1f1f1f}.s{fill:#6b6b68}.m{fill:#9a9a96}.k{fill:#d9d8d3}.ln{stroke:#e4e4e1}.tile{fill:#f4f3f0;stroke:#e4e4e1}
+
+.cd{fill:#f4f3f0;stroke:#e4e4e1}.bf{fill:#286797}.bw{fill:#b26a00}.tk{fill:#9a9a96}
+.st-run{fill:#245e8a}.st-ok{fill:#21653d}.st-bad{fill:#992e27}.st-warn{fill:#805300}
+.pb-codex{fill:#e2ebf5}.pt-codex{fill:#284f72}.pb-cursor{fill:#ddf1ec}.pt-cursor{fill:#1f5e52}
+.pb-antigravity{fill:#ece8fa}.pt-antigravity{fill:#4b3a99}.pb-claude{fill:#f8e9e1}.pt-claude{fill:#8a3f1f}
 
 .live{animation:apulse 1.6s ease-in-out infinite}@keyframes apulse{50%{opacity:.3}}
 @media (prefers-reduced-motion: reduce){.live{animation:none}}

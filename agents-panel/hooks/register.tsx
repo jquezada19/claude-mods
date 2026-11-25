@@ -1,10 +1,11 @@
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { AgentRun, EarlyStep, Panel, Session } from '../types'
-import { RECONCILE_MS, agentRowPrefix, applyComplete, applyReport, applyStep, ctxPercent, applyAnswer, applyCallDone, applyCheck, applyStepDetail, finishRow, noteTurn, openRow, reconcileRows, reopenRow, sumUsage, taskOf, toolLine, totals } from './agents'
+import type { AgentRun, CodexLimits, EarlyStep, Panel, Session, Usage as VendorUsage } from '../types'
+import { RECONCILE_MS, agentRowPrefix, applyComplete, applyReport, applyStep, ctxPercent, applyAnswer, applyCallDone, applyCheck, applyStepDetail, backendOf, finishRow, harvestRow, noteTurn, openRow, reconcileRows, reopenRow, statusWord, sumUsage, taskOf, toolLine, totals } from './agents'
 import type { ListedAgent, Usage } from './agents'
-import { BAND_H, CARD_H, STRIP_H, bandSvg, bandText, cardAlt, cardMeta, cardStats, cardSvg, headerSvg, headerText, stripSvg } from './draw'
-import { LAUNCH_GRACE_MS, doneStatus, parseLaunches, parseNotifications } from './launches'
+import { BACKEND_NAME, BAND_H, PANE_SVG_BUDGET, STRIP_H, bandSvg, bandText, cardAlt, cardHeight, cardMeta, cardReadout, cardStats, cardSvg, cardsWithin, detailLines, finishedAlt, finishedGroups, finishedHeight, finishedRows, finishedSvg, groupLine, headerHeight, headerSvg, headerText, stripSvg } from './draw'
+import { LAUNCH_GRACE_MS, doneExit, doneStatus, doneTokens, parseLaunches, parseNotifications } from './launches'
+import { TAIL_BYTES, codexDayDir, codexHomeOf, dayStart, mergeUsage, newestWritten, parseCodexTail, parseLedger, pickRollout } from './usage'
 
 const AGENTS = { plugin: 'agents-panel', key: 'agents' } as const
 const PANEL = { plugin: 'agents-panel', key: 'panel' } as const
@@ -12,6 +13,7 @@ const NOW = { plugin: 'agents-panel', key: 'now' } as const
 const SESSION = { plugin: 'agents-panel', key: 'session' } as const
 const LAST_RECONCILE = { plugin: 'agents-panel', key: 'lastReconcileAt' } as const
 const EARLY = { plugin: 'agents-panel', key: 'early' } as const
+const USAGE = { plugin: 'agents-panel', key: 'usage' } as const
 /** Ids whose steps can wait for their spawn card; the oldest falls off past this. */
 const EARLY_CAP = 20
 export const PANE = 'agents'
@@ -326,6 +328,31 @@ const editPanel = ($: EngineInterface, fn: (p: Panel) => Panel): Promise<void> =
   return run
 }
 
+/**
+ * Codex's own defaults from ~/.codex/config.toml (top-level `model`, `model_reasoning_effort`),
+ * for a Codex run whose command names neither; empty when the file is missing or unreadable.
+ */
+export const codexDefaults = async ($: EngineInterface, codexHome: string | null): Promise<{ model?: string; effort?: string }> => {
+  try {
+    const file = `${codexHome ?? ''}/config.toml`
+
+    if (codexHome === null || !(await $.fs.exists(file))) {
+      return {}
+    }
+
+    const text = await $.fs.read(file)
+    // top level only: everything before the first [table] header
+    const top = text.split(/^\s*\[/m)[0] ?? ''
+    const key = (name: string): string | undefined => new RegExp(`^\\s*${name}\\s*=\\s*["']([^"']+)["']`, 'm').exec(top)?.[1]
+    const model = key('model')
+    const effort = key('model_reasoning_effort')
+
+    return { ...(model === undefined ? {} : { model }), ...(effort === undefined ? {} : { effort }) }
+  } catch {
+    return {}
+  }
+}
+
 /** Cards open at once: their details stay well under the drawing's size limit. */
 const OPEN_CAP = 3
 
@@ -346,6 +373,144 @@ const landed = async ($: EngineInterface, doneFile: string | null): Promise<'don
   }
 }
 
+/** The last TAIL_BYTES of a file as text; null when it is missing or unreadable. */
+const readTail = async ($: EngineInterface, file: string): Promise<string | null> => {
+  try {
+    if (!(await $.fs.exists(file))) {
+      return null
+    }
+
+    const { size } = await $.fs.stat(file)
+
+    return await $.fs.read(file, { as: 'text', offset: Math.max(0, size - TAIL_BYTES), length: TAIL_BYTES })
+  } catch {
+    return null
+  }
+}
+
+/** The Codex session logs of the local day `at` falls in, oldest first, and the one written last; empty when the folder is missing. */
+const rolloutsOf = async ($: EngineInterface, codexHome: string, at: number): Promise<{ dir: string; names: string[]; newest: string | null }> => {
+  const dir = codexDayDir(codexHome, at)
+
+  try {
+    const files = (await $.fs.exists(dir)) ? (await $.fs.list(dir)).filter(f => f.kind === 'file') : []
+
+    return { dir, names: files.map(f => f.name).sort(), newest: newestWritten(files) }
+  } catch {
+    return { dir, names: [], newest: null }
+  }
+}
+
+/** The tail of the Codex session log written last, today's or (just past midnight, with none yet today) yesterday's. */
+const newestTail = async ($: EngineInterface, codexHome: string, at: number): Promise<string | null> => {
+  for (const day of [at, at - 86_400_000]) {
+    const { dir, newest } = await rolloutsOf($, codexHome, day)
+
+    if (newest !== null) {
+      return readTail($, `${dir}/${newest}`)
+    }
+  }
+
+  return null
+}
+
+/**
+ * The usage strip's figures, read again: the consult ledger's Cursor and Antigravity tokens
+ * for today, and Codex's rate-limit windows from `limits` or, without one, its newest session
+ * log of the day. A source that cannot be read keeps the figure it had. Never throws.
+ */
+export const refreshUsage = async ($: EngineInterface, limits?: CodexLimits): Promise<void> => {
+  try {
+    const at = await $.clock.now()
+    const home = await $.env.get('HOME')
+    const next: Partial<VendorUsage> = {}
+
+    if (home !== undefined) {
+      const ledger = await readTail($, `${home}/.claude/metrics/consult-ledger.jsonl`)
+
+      if (ledger !== null) {
+        Object.assign(next, parseLedger(ledger, dayStart(at)))
+      }
+
+      let codex = limits
+
+      if (codex === undefined) {
+        const codexHome = codexHomeOf({ HOME: home, CODEX_HOME: await $.env.get('CODEX_HOME') })
+        const tail = codexHome === null ? null : await newestTail($, codexHome, at)
+
+        codex = tail === null ? undefined : parseCodexTail(tail).limits
+      }
+
+      if (codex !== undefined) {
+        next.codex = codex
+      }
+    }
+
+    const { value: prev = null } = await $.state.get(USAGE)
+    await $.state.set(USAGE, mergeUsage(prev, next, at))
+  } catch {
+    // the strip keeps what it showed
+  }
+}
+
+/**
+ * What a finished external row left behind, read once: a buddy seat's exit code and tokens
+ * from its done file; a Codex run's tokens from its own session log, whose rate-limit figures
+ * go to the usage strip. Then the strip's ledger figures are read again. Never throws.
+ */
+const harvest = async ($: EngineInterface, id: string): Promise<void> => {
+  let limits: CodexLimits | undefined
+
+  try {
+    const { value: list = [] } = await $.state.get(AGENTS)
+    const a = list.find(r => r.id === id)
+    const x = a?.external
+
+    if (a === undefined || x === undefined || a.status === 'running' || x.tokens !== undefined) {
+      return
+    }
+
+    const found: { tokens?: number; exit?: number; log?: string } = {}
+
+    if (x.doneFile !== null) {
+      if (await $.fs.exists(x.doneFile)) {
+        const text = await $.fs.read(x.doneFile)
+        const exit = doneExit(text)
+        const tokens = doneTokens(text)
+        Object.assign(found, exit === null ? {} : { exit }, tokens === null ? {} : { tokens })
+      }
+    } else if (a.type.startsWith('codex:') && x.noLog !== true) {
+      // a run with no log of its own (`--ephemeral`, `resume`) reads none: the nearest log is another run's
+      const home = x.codexHome ?? codexHomeOf({ HOME: await $.env.get('HOME'), CODEX_HOME: await $.env.get('CODEX_HOME') })
+
+      if (home !== null) {
+        const { dir, names } = await rolloutsOf($, home, a.startedAt)
+        const taken = list.flatMap(r => (r.external?.log === undefined ? [] : [r.external.log]))
+        const log = pickRollout(names, a.startedAt, a.endedAt ?? (await $.clock.now()), taken)
+        const tail = log === null ? null : await readTail($, `${dir}/${log}`)
+
+        if (log !== null && tail !== null) {
+          const read = parseCodexTail(tail)
+          limits = read.limits
+          Object.assign(found, { log }, read.tokens === undefined ? {} : { tokens: read.tokens })
+        }
+      }
+    }
+
+    await queue($, l => harvestRow(l, id, found))
+  } catch {
+    // the card keeps its elapsed time and shows no tokens
+  }
+
+  await refreshUsage($, limits)
+}
+
+/** An external row's end: its status, then what it left behind. */
+const endExternal = async ($: EngineInterface, id: string, status: 'done' | 'failed' | 'lost', at: number): Promise<void> => {
+  await queue($, l => finishRow(l, id, status, at))
+  await harvest($, id)
+}
+
 /** Every running external row: over when its done file has landed, lost past its deadline. */
 const settleExternal = async ($: EngineInterface, at: number): Promise<void> => {
   const { value: list = [] } = await $.state.get(AGENTS)
@@ -360,9 +525,9 @@ const settleExternal = async ($: EngineInterface, at: number): Promise<void> => 
     const status = await landed($, x.doneFile)
 
     if (status !== null) {
-      await queue($, l => finishRow(l, a.id, status, at))
+      await endExternal($, a.id, status, at)
     } else if (x.deadline !== null && at > x.deadline) {
-      await queue($, l => finishRow(l, a.id, 'lost', at))
+      await endExternal($, a.id, 'lost', at)
     }
   }
 }
@@ -591,25 +756,59 @@ export const register: Register = (on, options) => {
     let timeouts: number[] = []
 
     try {
-      const env = { HOME: await $.env.get('HOME'), TMPDIR: await $.env.get('TMPDIR') }
-      // In a subagent, a Codex run is that subagent's own work (codex-rescue), which has its row.
-      const launches = parseLaunches(e.command, env).filter(l => e.agentId === undefined || !l.type.startsWith('codex:'))
+      const env = { HOME: await $.env.get('HOME'), TMPDIR: await $.env.get('TMPDIR'), CODEX_HOME: await $.env.get('CODEX_HOME') }
+      const parsed = parseLaunches(e.command, env)
+      const isCodex = (l: { type: string }): boolean => l.type.startsWith('codex:')
+      const defaults = parsed.some(isCodex) ? await codexDefaults($, parsed.find(isCodex)?.codexHome ?? codexHomeOf(env)) : {}
+      // A Codex run's model and effort: its flags, else Codex's config defaults.
+      const codexOf = (l: { model: string; effort?: string; ignoresConfig?: true }): { model: string; effort?: string } => {
+        // `--ignore-user-config` runs without the config these defaults come from
+        const d = l.ignoresConfig === true ? {} : defaults
+        const model = l.model !== 'codex' ? l.model : (d.model ?? 'codex')
+        const effort = l.effort ?? d.effort
+
+        return { model, ...(effort === undefined ? {} : { effort }) }
+      }
+      const relayed = e.agentId === undefined ? undefined : parsed.find(isCodex)
+
+      // In a subagent, a Codex run is that subagent's own work (codex-rescue), which has its
+      // row: the row takes the Codex model and effort instead of opening a second one.
+      if (relayed !== undefined) {
+        const codex = codexOf(relayed)
+        await queue($, list => list.map(a => (a.id === e.agentId ? { ...a, codex } : a)))
+      }
+
+      const launches = parsed.filter(l => e.agentId === undefined || !isCodex(l))
       const at = await $.clock.now()
       const base = e.tool_use_id ?? `bash-${at}`
-      const rows: AgentRun[] = launches.map((launch, i) => ({
-        id: `${base}:${i}`,
-        type: launch.type,
-        description: e.description || launch.type,
-        model: launch.model,
-        status: 'running',
-        startedAt: at,
-        contextTokens: 0,
-        tokens: 0,
-        steps: 0,
-        external: { doneFile: launch.doneFile, deadline: null },
-      }))
+      const rows: AgentRun[] = launches.map((launch, i) => {
+        const codex = isCodex(launch) ? codexOf(launch) : null
+        const effort = codex === null ? launch.effort : codex.effort
+
+        return {
+          id: `${base}:${i}`,
+          type: launch.type,
+          description: e.description || launch.type,
+          model: codex === null ? launch.model : codex.model,
+          ...(effort === undefined ? {} : { effort }),
+          status: 'running',
+          startedAt: at,
+          contextTokens: 0,
+          tokens: 0,
+          steps: 0,
+          external: {
+            doneFile: launch.doneFile,
+            deadline: null,
+            ...(launch.capMs === undefined ? {} : { capMs: launch.capMs }),
+            ...(launch.codexHome === undefined ? {} : { codexHome: launch.codexHome }),
+            ...(launch.noLog === true ? { noLog: true as const } : {}),
+          },
+        }
+      })
 
       if (rows.length > 0) {
+        // The usage strip's figures as this launch finds them (two tail reads); it never throws.
+        await refreshUsage($)
         await queue($, list => rows.reduce(openRow, list))
         ids = rows.map(r => r.id)
         timeouts = launches.map(l => l.timeoutMs)
@@ -636,6 +835,10 @@ export const register: Register = (on, options) => {
       try {
         const at = await $.clock.now()
         await queue($, list => ids.reduce((l, id) => finishRow(l, id, status, at), list))
+
+        for (const id of ids) {
+          await harvest($, id)
+        }
       } catch {
         // The row stays running; the deadline, or the next session, ends it.
       }
@@ -710,7 +913,7 @@ export const register: Register = (on, options) => {
             }
 
             const status = (await landed($, a.external.doneFile)) ?? (end.status === 'completed' ? 'done' : 'failed')
-            await queue($, l => finishRow(l, a.id, status, at))
+            await endExternal($, a.id, status, at)
           }
         }
       }
@@ -741,7 +944,7 @@ export const register: Register = (on, options) => {
           }
 
           const status = (await landed($, x.doneFile)) ?? 'done'
-          await queue($, l => finishRow(l, a.id, status, at))
+          await endExternal($, a.id, status, at)
         }
       }
     } catch {
@@ -854,28 +1057,53 @@ export const register: Register = (on, options) => {
     const { value: p = BLANK_PANEL } = await $.state.get(PANEL)
     const { value: session = null } = await $.state.get(SESSION)
     const { value: tickNow = 0 } = await $.state.get(NOW)
+    const { value: usage = null } = await $.state.get(USAGE)
     const at = Math.max(tickNow, ...list.map(a => a.startedAt), 0)
     const running = list.filter(a => a.status === 'running').reverse()
     const finished = list.filter(a => a.status !== 'running').reverse()
     const t = totals(list, at)
     const MAX_CARDS = 50
-    const shownFinished = finished.slice(0, MAX_CARDS)
-    const moreFinished = finished.length - shownFinished.length
-    const toggleCompact = (
-      <Button
-        key="compact"
-        label={p.isCompact ? 'Expand' : 'Collapse'}
-        plain
-        onPress={() => void editPanel($, prev => ({ ...prev, isCompact: !prev.isCompact }))}
-      />
+    // By default the finished runs are summarised, one row per vendor and model; a run that did not
+    // end done keeps its card. `showsEachDone` lists every finished card, as before 0.8.0.
+    const isEach = p.showsEachDone === true
+    const summary = finishedGroups(finished, at)
+    const listed = isEach ? finished : summary.attention
+    const shownFinished = listed.slice(0, MAX_CARDS)
+    const moreFinished = listed.length - shownFinished.length
+    const isDesktop = e.surface === 'desktop'
+    const compactPress = () => void editPanel($, prev => ({ ...prev, isCompact: !prev.isCompact }))
+    const compactLabel = p.isCompact ? '▾ Expand' : '▴ Collapse'
+    // a desktop draws its own secondary button, with the padding a bare text label lacked; the terminal keeps the plain label
+    const toggleCompact = isDesktop ? (
+      <Box key="compact-row" flexDirection="row" paddingY="sm">
+        <Button key="compact" label={compactLabel} variant="secondary" onPress={compactPress} />
+      </Box>
+    ) : (
+      <Button key="compact" label={compactLabel} plain onPress={compactPress} />
     )
+    const hasDone = summary.groups.length > 0
+    const toggleEach =
+      p.isDoneCollapsed || !hasDone ? null : (
+        <Button
+          key="each"
+          label={isEach ? 'Summary' : 'Each card'}
+          plain
+          dimColor
+          onPress={() => void editPanel($, prev => ({ ...prev, showsEachDone: prev.showsEachDone !== true }))}
+        />
+      )
     const toggleDone = (
-      <Button
-        key="done"
-        label={`${p.isDoneCollapsed ? '▸' : '▾'} Finished · ${finished.length}`}
-        plain
-        onPress={() => void editPanel($, prev => ({ ...prev, isDoneCollapsed: !prev.isDoneCollapsed }))}
-      />
+      // the toggle sits beside the label: spread across the row it landed past the drawings' right edge,
+      // since the row spans the pane and every drawing stops at W
+      <Box key="done-row" flexDirection="row" gap="md">
+        <Button
+          key="done"
+          label={`${p.isDoneCollapsed ? '▸' : '▾'} Finished · ${finished.length}`}
+          plain
+          onPress={() => void editPanel($, prev => ({ ...prev, isDoneCollapsed: !prev.isDoneCollapsed }))}
+        />
+        {toggleEach}
+      </Box>
     )
 
     // A card opens to its task, newest tool uses, a cut-off, and the start of its answer.
@@ -925,29 +1153,42 @@ export const register: Register = (on, options) => {
         )
       }
 
+      // One render's markup is bounded (PANE_SVG_BUDGET): the header, then the running cards,
+      // then the newest finished ones that still fit; the rest are counted, not drawn.
+      const head = headerSvg(W, t, usage, at)
+      const sum = p.isDoneCollapsed || isEach || !hasDone ? '' : finishedSvg(W, summary.groups)
+      const drawn = (rows: AgentRun[], budget: number): { cards: { a: AgentRun; source: string }[]; used: number } => {
+        const all = rows.map(a => ({ a, source: cardSvg(W, a, at, session, opened.has(a.id)) }))
+        const cards = all.slice(0, cardsWithin(all.map(c => c.source.length), budget))
+
+        return { cards, used: cards.reduce((n, c) => n + c.source.length, 0) }
+      }
+      const run = drawn(running, PANE_SVG_BUDGET - head.length)
+      const fin = p.isDoneCollapsed ? { cards: [], used: 0 } : drawn(shownFinished, Math.max(0, PANE_SVG_BUDGET - head.length - run.used - sum.length))
+      const moreRunning = running.length - run.cards.length
+      const moreDone = listed.length - fin.cards.length
+      // opened, a card's details are drawn inside it; its alt carries them too, for a reader that cannot see the drawing
+      const altOf = (a: AgentRun): string =>
+        opened.has(a.id) ? [cardAlt(a, at, session), ...detailLines(a, W).map(l => l.text)].join('. ') : cardAlt(a, at, session)
+      const card = ({ a, source }: { a: AgentRun; source: string }) => (
+        <Box key={`card:${a.id}`} flexDirection="column">
+          <Svg source={source} alt={altOf(a)} width={W} height={cardHeight(a, at, session, W, opened.has(a.id))} />
+          {detailToggle(a)}
+        </Box>
+      )
+
       return (
         <Box flexDirection="column">
-          <Svg source={headerSvg(W, t)} alt={headerText(t)} width={W} height={44} />
+          <Svg source={head} alt={headerText(t, usage, at)} width={W} height={headerHeight(W, usage, at)} />
           {toggleCompact}
           {list.length === 0 && <Text dimColor>No subagents yet.</Text>}
           {running.length > 0 && <Text dimColor>{`Running · ${running.length}`}</Text>}
-          {running.map(a => (
-            <Box key={`card:${a.id}`} flexDirection="column">
-              <Svg source={cardSvg(W, a, at, session)} alt={cardAlt(a, at, session)} width={W} height={CARD_H} />
-              {detailToggle(a)}
-              {detailBlock(a)}
-            </Box>
-          ))}
+          {run.cards.map(card)}
+          {moreRunning > 0 && <Text dimColor>{`+${moreRunning} more running`}</Text>}
           {finished.length > 0 && toggleDone}
-          {!p.isDoneCollapsed &&
-            shownFinished.map(a => (
-              <Box key={`card:${a.id}`} flexDirection="column">
-                <Svg source={cardSvg(W, a, at, session)} alt={cardAlt(a, at, session)} width={W} height={CARD_H} />
-                {detailToggle(a)}
-                {detailBlock(a)}
-              </Box>
-            ))}
-          {!p.isDoneCollapsed && moreFinished > 0 && <Text dimColor>{`+${moreFinished} more`}</Text>}
+          {fin.cards.map(card)}
+          {!p.isDoneCollapsed && moreDone > 0 && <Text dimColor>{`+${moreDone} more`}</Text>}
+          {sum !== '' && <Svg key="summary" source={sum} alt={finishedAlt(summary.groups)} width={W} height={finishedHeight(finishedRows(summary.groups))} />}
         </Box>
       )
     }
@@ -966,9 +1207,9 @@ export const register: Register = (on, options) => {
               ? 'gray'
               : 'magenta'
     const row = (a: AgentRun) => {
-      const pct = a.status === 'lost' ? null : ctxPercent(a, session)
-      const fillPct = a.status === 'done' ? 100 : (pct ?? 0)
-      const filled = Math.round((barW * fillPct) / 100)
+      // A bar only while it measures something: a subagent's context, an external seat's timeout.
+      const read = cardReadout(a, at, session)
+      const filled = read.ratio === null ? 0 : Math.max(1, Math.round(barW * read.ratio))
 
       return (
         <Box key={`card:${a.id}`} flexDirection="column" marginBottom={1}>
@@ -978,12 +1219,12 @@ export const register: Register = (on, options) => {
               {a.description || a.type}
             </Text>
           </Box>
-          <Text dimColor wrap="truncate-end">{`  ${cardMeta(a)}`}</Text>
+          <Text dimColor wrap="truncate-end">{`  ${BACKEND_NAME[backendOf(a)]} · ${cardMeta(a)} · ${statusWord(a)}`}</Text>
           <Text wrap="truncate-end">
             {'  '}
-            <Text color={a.status === 'done' ? 'green' : 'magenta'}>{'█'.repeat(filled)}</Text>
-            <Text dimColor>{'░'.repeat(Math.max(0, barW - filled))}</Text>
-            <Text dimColor>{` ${cardStats(a, at, session)}`}</Text>
+            {read.ratio !== null && <Text color={read.isWarn ? 'yellow' : 'magenta'}>{'█'.repeat(filled)}</Text>}
+            {read.ratio !== null && <Text dimColor>{`${'░'.repeat(Math.max(0, barW - filled))} `}</Text>}
+            <Text dimColor>{cardStats(a, at, session)}</Text>
           </Text>
           {detailToggle(a)}
           {detailBlock(a)}
@@ -994,7 +1235,7 @@ export const register: Register = (on, options) => {
     return (
       <Box flexDirection="column">
         <Box flexDirection="row" justifyContent="space-between">
-          <Text dimColor>{headerText(t)}</Text>
+          <Text dimColor>{headerText(t, usage, at)}</Text>
           {toggleCompact}
         </Box>
         {p.isCompact ? (
@@ -1013,6 +1254,13 @@ export const register: Register = (on, options) => {
             {finished.length > 0 && toggleDone}
             {!p.isDoneCollapsed && shownFinished.map(row)}
             {!p.isDoneCollapsed && moreFinished > 0 && <Text dimColor>{`+${moreFinished} more`}</Text>}
+            {!p.isDoneCollapsed &&
+              !isEach &&
+              summary.groups.map(g => (
+                <Text key={`group:${g.backend}:${g.meta}`} dimColor wrap="truncate-end">
+                  {`  ${groupLine(g)}`}
+                </Text>
+              ))}
           </Box>
         )}
       </Box>

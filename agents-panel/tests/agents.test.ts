@@ -368,7 +368,9 @@ test('costumeOf strips a plugin prefix and maps the known types', async () => {
   expect(costumeOf('buddy:deepseek-v41-flash-1017-high')).toBe('deepseek')
   expect(costumeOf('buddy:cursor')).toBe('plain')
   expect(costumeOf('buddy:gemini-3.8-flash-high')).toBe('gemini')
-  expect(costumeOf('gemini-something')).toBe('plain')
+  // any Gemini, whatever launcher: the Antigravity CLI's agy seats too
+  expect(costumeOf('buddy:agy-gemini-4-neon-high')).toBe('gemini')
+  expect(costumeOf('gemini-something')).toBe('gemini')
   expect(costumeOf('kimi-something')).toBe('plain')
   expect(costumeOf('Plan')).toBe('engineer')
   expect(costumeOf('claude-code-guide')).toBe('chef')
