@@ -35,7 +35,7 @@ In the terminal the same row is text:
   the tokens before the time when the runs reported any), twelve rows at most, then `+n more kinds`. A run that did
   not end done (failed, timed out, stopped, lost) keeps its own card above the summary. `Each card` beside the
   fold lists every finished card instead (50 at most, then `+n more`), and `Summary` goes back. A card's
-  `▸ details` opens its task, newest tool uses, cut-off and the start of its answer inside the card,
+  `▸ Details` opens its task, newest tool uses, cut-off and the start of its answer inside the card,
   wrapped to its width. With none yet it says `No subagents yet.`
 
 The pane, open and collapsed:
@@ -146,7 +146,7 @@ at another copy of the mod).
 
 ## 0.3.0 (2026-10-16)
 
-- **Cards open to their details.** A `▸ details` button under a card opens what the subagent was asked (its task, 400 characters), its three newest tool uses, and the start of its answer (400 characters). Three cards at most stay open, the newest kept; `/clear` and `/resume` shut them.
+- **Cards open to their details.** A `▸ Details` button under a card opens what the subagent was asked (its task, 400 characters), its three newest tool uses, and the start of its answer (400 characters). Three cards at most stay open, the newest kept; `/clear` and `/resume` shut them.
 - **Tool lines never show a command's arguments.** A Bash use shows only the program it runs (`Bash curl`), a web fetch only host and path (`WebFetch example.com/docs`): arguments, headers and query strings can carry credentials, and the pane may be on a shared screen. Files, patterns and searches show as given.
 - **A run cut off at the output limit** (a step stopping at `max_tokens`) ends its card's stats with `· cut off`, without opening the card.
 - What arrives before a card (steps with their tools, a completion with its answer, clipped) is held and lands on the card when it opens. A resumed spawn shows its new task and drops the earlier run's tools and answer. Panel edits run one at a time, so two presses never drop one.
@@ -192,3 +192,7 @@ at another copy of the mod).
 - **Collapse is a button.** On desktop `▴ Collapse` / `▾ Expand` is the app's own secondary button with room around it; it was a bare word.
 - **Spacing on a 4-pixel scale.** Card gap 8 (was 6), corner radius 12 for cards and tiles (was 10), tile inset 12 (was 10), gap between tiles 8 (was 6), vendor pills 20 high with 8 either side of the name. Row height, cell padding, divider and pill sizes follow the spacing, radius and density values of Meta's Astryx design system (public, MIT; read, not installed).
 
+## 0.9.0 (2026-11-25)
+
+- **The details toggle is in the card.** On desktop `▸ Details` / `▾ Hide details` sits on a 32-high strip along the card's bottom edge, inside its outline, under a hairline; it was a bare word under the card. Opened, the task, tool uses and answer sit between the hairline and the toggle. The strip follows Astryx's grouped disclosure row (a 32 element height, a 1px rule above, the label at the start in the secondary colour).
+- The gap between cards is now above each card's outline, not under it, so the outline ends on the drawing's bottom edge, which is what the toggle is anchored to. The toggle's distance from the card's left edge is in character cells (6), the one figure here not checked against a desktop render.

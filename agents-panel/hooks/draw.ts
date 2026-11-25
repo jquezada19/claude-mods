@@ -231,6 +231,13 @@ export const cardsWithin = (sizes: readonly number[], budget: number): number =>
 /** Where a card's text column starts, right of its mascot; its right edge is 12 in from the card's. */
 const CARD_L = 56
 const DETAIL_LH = 16
+/** The strip a card with details keeps along its bottom edge, inside its outline, for the toggle the pane lays over it. */
+export const CARD_FOOT_H = 32
+
+/** Whether a card has anything to open to: a task, a tool use, an answer or a cut-off. */
+export const hasDetail = (row: AgentRun): boolean =>
+  row.detail !== undefined &&
+  (row.detail.task !== undefined || (row.detail.tools ?? []).length > 0 || row.detail.answer !== undefined || row.detail.isCutOff === true)
 
 /** An opened card's detail lines, wrapped or cut to the card's text column: its task, newest tool uses, a cut-off, the start of its answer. */
 export const detailLines = (row: AgentRun, W: number): { text: string; cls: string }[] => {
@@ -253,9 +260,17 @@ export const detailLines = (row: AgentRun, W: number): { text: string; cls: stri
 /** What opened details add under the readout: a hairline and one 16-high line each; nothing when there is nothing to show. */
 const detailExtra = (n: number): number => (n === 0 ? 0 : 10 + n * DETAIL_LH)
 
-/** The card's height: taller while a bar runs under its readout, and taller again by its details when opened. */
+/** What a card with details adds under its readout: the opened lines, then the toggle's strip. */
+const footExtra = (row: AgentRun, W: number, isOpen: boolean): number =>
+  hasDetail(row) ? (isOpen ? detailExtra(detailLines(row, W).length) : 0) + CARD_FOOT_H : 0
+
+/**
+ * The card's height, the gap above it included: taller while a bar runs under its readout, by the
+ * toggle's strip when it has details, and by the details when opened. The gap is above the outline,
+ * so the outline's bottom edge is the drawing's: what the pane anchors to the drawing's bottom is in the card.
+ */
 export const cardHeight = (row: AgentRun, at: number, session: Session | null, W = 0, isOpen = false): number =>
-  (cardReadout(row, at, session).ratio === null ? CARD_FLAT_H : CARD_BAR_H) + (isOpen ? detailExtra(detailLines(row, W).length) : 0) + CARD_GAP
+  (cardReadout(row, at, session).ratio === null ? CARD_FLAT_H : CARD_BAR_H) + footExtra(row, W, isOpen) + CARD_GAP
 
 /**
  * A line's figures joined, the summed tokens among them only when some row reports any: an
@@ -379,7 +394,7 @@ export const cardSvg = (W: number, row: AgentRun, at: number, session: Session |
   const read = cardReadout(row, at, session)
   const base = read.ratio === null ? CARD_FLAT_H : CARD_BAR_H
   const lines = isOpen ? detailLines(row, W) : []
-  const H = base + detailExtra(lines.length)
+  const H = base + footExtra(row, W, isOpen)
   const L = CARD_L
   const R = W - 12
   const isDim = row.status === 'lost'
@@ -404,9 +419,10 @@ export const cardSvg = (W: number, row: AgentRun, at: number, session: Session |
         // orange sat too close to the warning amber to tell a calm context bar from a seat about to time out
         `<rect class="${read.isWarn ? 'bw' : 'bf'}" x="${L}" y="60" width="${Math.max(3, Math.round(barW * Math.min(1, read.ratio)))}" height="4" rx="2"/>` +
         `<rect class="tk" x="${L + Math.round(barW * WARN_AT)}" y="58" width="1" height="8"/>`
-  // opened, the details stay inside the card's own outline: a hairline under the readout, then one line each
+  // a card with details ends in a hairline and the toggle's strip (a 32-high row, the hairline above it as on a
+  // grouped disclosure row); opened, one line each sits between the two, held by spacing, with no second rule
   const details =
-    lines.length === 0
+    !hasDetail(row)
       ? ''
       : `<line class="ln" x1="${L}" y1="${base + 0.5}" x2="${R}" y2="${base + 0.5}"/>` +
         lines.map((l, i) => `<text class="${l.cls}" x="${L}" y="${base + 18 + i * DETAIL_LH}" font-family="${FONT}" font-size="11">${xml(l.text)}</text>`).join('')
@@ -414,7 +430,8 @@ export const cardSvg = (W: number, row: AgentRun, at: number, session: Session |
   return svg(
     W,
     H + CARD_GAP,
-    `<rect class="cd" x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="12"/>` +
+    // the gap is above the card: its outline ends on the drawing's bottom edge, where the pane lays the details toggle
+    `<g transform="translate(0 ${CARD_GAP})"><rect class="cd" x="0.5" y="0.5" width="${W - 1}" height="${H - 1}" rx="12"/>` +
       `${clawd(10, (base - 36) / 2, costume, { isWalking: row.status === 'running', dim: isDim })}` +
       `<text class="${isDim ? 's' : 't'}" x="${L}" y="19" font-family="${FONT}" font-size="13" font-weight="600">${xml(fitText(row.description || row.type, 13, R - L))}</text>` +
       `<rect class="pb-${backend}" x="${L}" y="23" width="${pillW}" height="20" rx="10"/>` +
@@ -425,7 +442,8 @@ export const cardSvg = (W: number, row: AgentRun, at: number, session: Session |
       (read.label === '' ? '' : `<text class="${read.isWarn ? 'st-warn' : 's'}" x="${L}" y="53" font-family="${FONT}" font-size="11">${xml(read.label)}</text>`) +
       `<text class="s" x="${R}" y="53" text-anchor="end" font-family="${FONT}" font-size="11" font-variant-numeric="tabular-nums">${xml(value)}</text>` +
       bar +
-      details,
+      details +
+      '</g>',
   )
 }
 

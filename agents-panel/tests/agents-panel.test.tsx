@@ -720,6 +720,19 @@ for (const surface of SURFACES) {
     await p.done()
     p = await pane($, surface)
     expect(p.all).not.toContain('Task:')
+    expect(p.buttons.find(b => b.props.key === 'detail:id-a')!.props.label).toBe('▸ Details')
+    if (surface === 'desktop') {
+      // the toggle is laid over the card's own bottom strip: its Box leaves the flow, pinned to the bottom of a
+      // card Box that shrinks to the drawing, so it is inside the outline and not a row under it
+      const foot = p.boxes.find(b => b.props.key === 'foot:id-a')!
+      expect([foot.props.position, foot.props.bottom]).toEqual(['absolute', 0])
+      const cardBox = p.boxes.find(b => b.props.key === 'card:id-a')!
+      expect([cardBox.props.position, cardBox.props.alignSelf]).toEqual(['relative', 'flex-start'])
+      // one strip per toggle: every details button has its own, and no card has a strip without one
+      const ids = (prefix: string, of: { props: Record<string, unknown> }[]) =>
+        of.map(one => String(one.props.key)).filter(k => k.startsWith(prefix)).map(k => k.slice(prefix.length)).sort()
+      expect(ids('foot:', p.boxes)).toEqual(ids('detail:', p.buttons))
+    }
     // The cut-off shows on the card without opening it.
     expect(p.all).toContain('cut off')
     await p.press('detail:id-a')

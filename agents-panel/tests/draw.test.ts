@@ -1,7 +1,7 @@
 import { expect, test } from 'claude-code/testing'
 
 import type { AgentRun } from '../types'
-import { BAND_H, CARD_BAR_H, CARD_FLAT_H, CARD_GAP, bandCrabCount, bandSvg, bandText, cardAlt, cardHeight, cardMeta, cardReadout, cardStats, cardSvg, fitText, headerHeight, headerSvg, headerText, stripSvg, textWidth, usageEntries, xml, cardsWithin, finishedGroups, finishedSvg, finishedHeight, finishedAlt, groupLine, wrapText, MAX_GROUPS } from '../hooks/draw'
+import { BAND_H, CARD_BAR_H, CARD_FLAT_H, CARD_GAP, bandCrabCount, bandSvg, bandText, cardAlt, cardHeight, cardMeta, cardReadout, cardStats, cardSvg, fitText, headerHeight, headerSvg, headerText, stripSvg, textWidth, usageEntries, xml, cardsWithin, hasDetail, CARD_FOOT_H, finishedGroups, finishedSvg, finishedHeight, finishedAlt, groupLine, wrapText, MAX_GROUPS } from '../hooks/draw'
 
 const T0 = 1_000_000
 const row = (id: string, over: Partial<AgentRun> = {}): AgentRun => ({
@@ -339,6 +339,13 @@ test('an opened card draws its details inside its own outline, wrapped to the ca
   const taskLines = [...open.matchAll(/<text class="s" x="56" y="\d+"[^>]*>([^<]*)<\/text>/g)].map(m => m[1]!)
   expect(taskLines.length).toBeGreaterThan(1)
   expect(taskLines.every(l => textWidth(l, 11) <= 600 - 12 - 56)).toBe(true)
+  // a card with details keeps a strip for its toggle inside the outline, shut or open, and the gap is above the outline:
+  // the outline's bottom edge is the drawing's, which is what the pane anchors the toggle to
+  expect(hasDetail(a)).toBe(true)
+  expect(cardHeight(a, T0 + 99_000, SESSION)).toBe(CARD_FLAT_H + CARD_FOOT_H + CARD_GAP)
+  expect(shut).toContain(`<g transform="translate(0 ${CARD_GAP})"><rect class="cd" x="0.5" y="0.5" width="599" height="${CARD_FLAT_H + CARD_FOOT_H - 1}" rx="12"/>`)
+  expect(shut).toContain(`<line class="ln" x1="56" y1="${CARD_FLAT_H + 0.5}"`)
+  expect(hasDetail(row('e', { status: 'done', endedAt: T0 + 1000 }))).toBe(false)
   // a card with nothing to show opens to nothing more
   expect(cardHeight(row('e', { status: 'done', endedAt: T0 + 1000 }), T0 + 9000, SESSION, 600, true)).toBe(CARD_FLAT_H + CARD_GAP)
 })

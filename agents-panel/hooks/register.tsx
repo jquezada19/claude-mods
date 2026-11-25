@@ -3,7 +3,7 @@ import type { EngineInterface, Register } from 'claude-code'
 import type { AgentRun, CodexLimits, EarlyStep, Panel, Session, Usage as VendorUsage } from '../types'
 import { RECONCILE_MS, agentRowPrefix, applyComplete, applyReport, applyStep, ctxPercent, applyAnswer, applyCallDone, applyCheck, applyStepDetail, backendOf, finishRow, harvestRow, noteTurn, openRow, reconcileRows, reopenRow, statusWord, sumUsage, taskOf, toolLine, totals } from './agents'
 import type { ListedAgent, Usage } from './agents'
-import { BACKEND_NAME, BAND_H, PANE_SVG_BUDGET, STRIP_H, bandSvg, bandText, cardAlt, cardHeight, cardMeta, cardReadout, cardStats, cardSvg, cardsWithin, detailLines, finishedAlt, finishedGroups, finishedHeight, finishedRows, finishedSvg, groupLine, headerHeight, headerSvg, headerText, stripSvg } from './draw'
+import { BACKEND_NAME, BAND_H, PANE_SVG_BUDGET, STRIP_H, bandSvg, bandText, cardAlt, cardHeight, cardMeta, cardReadout, cardStats, cardSvg, cardsWithin, detailLines, hasDetail, finishedAlt, finishedGroups, finishedHeight, finishedRows, finishedSvg, groupLine, headerHeight, headerSvg, headerText, stripSvg } from './draw'
 import { LAUNCH_GRACE_MS, doneExit, doneStatus, doneTokens, parseLaunches, parseNotifications } from './launches'
 import { TAIL_BYTES, codexDayDir, codexHomeOf, dayStart, mergeUsage, newestWritten, parseCodexTail, parseLedger, pickRollout } from './usage'
 
@@ -355,6 +355,8 @@ export const codexDefaults = async ($: EngineInterface, codexHome: string | null
 
 /** Cards open at once: their details stay well under the drawing's size limit. */
 const OPEN_CAP = 3
+/** Cells from a card's left edge to its details toggle: about the card's text column (56 px at 8 px a cell), less the button's own inset. */
+const CARD_FOOT_LEFT = 6
 
 /** The launcher's verdict from its done file, or null while the file has not landed. */
 const landed = async ($: EngineInterface, doneFile: string | null): Promise<'done' | 'failed' | null> => {
@@ -1108,15 +1110,13 @@ export const register: Register = (on, options) => {
 
     // A card opens to its task, newest tool uses, a cut-off, and the start of its answer.
     const opened = new Set(p.open ?? [])
-    const hasDetail = (a: AgentRun): boolean =>
-      a.detail !== undefined &&
-      (a.detail.task !== undefined || (a.detail.tools ?? []).length > 0 || a.detail.answer !== undefined || a.detail.isCutOff === true)
     const detailToggle = (a: AgentRun) =>
       !hasDetail(a) ? null : (
         <Button
           key={`detail:${a.id}`}
-          label={opened.has(a.id) ? '▾ details' : '▸ details'}
+          label={opened.has(a.id) ? '▾ Hide details' : '▸ Details'}
           plain
+          dimColor
           onPress={() =>
             void editPanel($, prev => {
               // Only cards still listed stay open; the newest OPEN_CAP win.
@@ -1171,9 +1171,15 @@ export const register: Register = (on, options) => {
       const altOf = (a: AgentRun): string =>
         opened.has(a.id) ? [cardAlt(a, at, session), ...detailLines(a, W).map(l => l.text)].join('. ') : cardAlt(a, at, session)
       const card = ({ a, source }: { a: AgentRun; source: string }) => (
-        <Box key={`card:${a.id}`} flexDirection="column">
+        // the toggle is laid over the strip the card keeps along its bottom edge (CARD_FOOT_H), inside its outline:
+        // the Box shrinks to the drawing, whose bottom edge is the outline's, so `bottom={0}` needs no pixel figure
+        <Box key={`card:${a.id}`} flexDirection="column" position="relative" alignSelf="flex-start">
           <Svg source={source} alt={altOf(a)} width={W} height={cardHeight(a, at, session, W, opened.has(a.id))} />
-          {detailToggle(a)}
+          {hasDetail(a) && (
+            <Box key={`foot:${a.id}`} position="absolute" bottom={0} left={CARD_FOOT_LEFT} flexDirection="row" paddingBottom="xs">
+              {detailToggle(a)}
+            </Box>
+          )}
         </Box>
       )
 

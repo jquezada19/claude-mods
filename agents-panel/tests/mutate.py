@@ -15,7 +15,7 @@ REGISTER = os.path.join("hooks", "register.tsx")
 LAUNCHES = os.path.join("hooks", "launches.ts")
 USAGE = os.path.join("hooks", "usage.ts")
 # The suite's size at the time of writing; a mutant that fails everything is the module breaking.
-SUITE = 160
+SUITE = 175
 
 MUTANTS = [
     ("fallback-lifetime", AGENTS, 'const seen = turnId === undefined ? a.steps : (a.turns?.[turnId] ?? 0)', 'const seen = a.steps'),
@@ -209,6 +209,13 @@ MUTANTS = [
     # 2026-11-25 live check: Each card was spread to the pane's far edge, past the drawings' right edge
     ("each-toggle-spread", REGISTER, '<Box key="done-row" flexDirection="row" gap="md">', '<Box key="done-row" flexDirection="row" gap="md" justifyContent="space-between">'),
     ("each-toggle-no-gap", REGISTER, '<Box key="done-row" flexDirection="row" gap="md">', '<Box key="done-row" flexDirection="row">'),
+    # 2026-11-25 (0.9.0): the details toggle is inside the card, on a strip along its bottom edge
+    ("foot-strip-gone", DRAW, "(isOpen ? detailExtra(detailLines(row, W).length) : 0) + CARD_FOOT_H : 0", "(isOpen ? detailExtra(detailLines(row, W).length) : 0) : 0"),
+    ("gap-under-card", DRAW, '`<g transform="translate(0 ${CARD_GAP})">', '`<g transform="translate(0 0)">'),
+    ("foot-hairline-gone", DRAW, "    !hasDetail(row)\n      ? ''\n      : `<line", "    lines.length === 0\n      ? ''\n      : `<line"),
+    ("toggle-under-card", REGISTER, '<Box key={`foot:${a.id}`} position="absolute" bottom={0}', '<Box key={`foot:${a.id}`}'),
+    ("card-box-spans-pane", REGISTER, '<Box key={`card:${a.id}`} flexDirection="column" position="relative" alignSelf="flex-start">', '<Box key={`card:${a.id}`} flexDirection="column" position="relative">'),
+    ("toggle-old-label", REGISTER, "'▾ Hide details' : '▸ Details'", "'▾ details' : '▸ details'"),
 ]
 unknown = set(sys.argv[1:]) - {m[0] for m in MUTANTS}
 if unknown:
