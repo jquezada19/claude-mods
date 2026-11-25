@@ -48,7 +48,7 @@ export const KEYS: ReadonlyArray<{ key: string; label: string; when?: 'tabs' | '
   { key: 'j / k', label: 'next / previous file' },
   { key: 'n / p', label: 'next / previous change', when: 'hunks' },
   { key: 'w', label: 'wrap long lines' },
-  { key: `${KEY_PAN_LEFT} / ${KEY_PAN_RIGHT}`, label: 'scroll the current change left / right (cut lines)', when: 'hunks' },
+  { key: `${KEY_PAN_LEFT} / ${KEY_PAN_RIGHT}`, label: 'scroll the current change left / right (cut lines, where the pane cannot scroll)', when: 'hunks' },
   { key: `${KEY_MORE_CONTEXT} / ${KEY_LESS_CONTEXT}`, label: 'more / less context' },
   { key: KEY_IGNORE_WHITESPACE, label: 'ignore whitespace' },
   { key: KEY_VIEWED, label: 'mark viewed, go to the next unviewed file' },

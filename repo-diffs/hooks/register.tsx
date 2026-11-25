@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, RenderSurface, Timer } from 'claude-code'
 
 import type { CommentTag, Composing, DiffState, FileChange, PrEntry, PrInfo, RepoSnap, ReviewComment, Scope, TurnEdits, View } from '../types'
-import { PAN_STEP, cleanPatch, clipHunk, exportComments, firstChange, grouped, hunkContext, hunkHolds, hunkRuns, type HunkRun, nextHunkIndex, panLine, panMax, patchNotes, pickSection, splitHunks } from './hunks'
+import { PAN_STEP, cleanPatch, clipHunk, exportComments, firstChange, grouped, gutterDigits, hunkCells, hunkContext, hunkHolds, hunkId, hunkRuns, type HunkRun, nextHunkIndex, panLine, panMax, patchNotes, pickSection, splitHunks } from './hunks'
 import { parseNameStatus, parseNumstat, parseUnmerged } from './git-parse'
 import { PR_FIELDS, formatPatterns, isExcluded, parsePatterns, parsePrView, prFailure } from './pr'
 import { LOG_ARGS, commitRange, parseLog, relTime } from './commits'
@@ -46,6 +46,14 @@ const DIFF_CAP = 60_000
 // text: every surface draws a tree's first 100,000 characters of text (strings,
 // Code sources) and past that cut a Box loses its key, so a later container
 // could be neither read whole nor scrolled to; 90,000 leaves the margin.
+// Syntax colours cost a node a coloured span, and the selected file is drawn
+// whatever it weighs, so its spans are bounded here: this many in one drawing
+// (well inside the 1,600 nodes a remote surface holds), and none on a line too
+// long to be read as code (a minified bundle). Past either, a line is drawn
+// in the text colour, and the card says so.
+const SPANS_REMOTE = 900
+const SPANS_TERMINAL = 12_000
+const LINE_HIGHLIGHT_CAP = 2_000
 const ROOM_REMOTE = { nodes: 1_600, chars: 170_000, text: 90_000 }
 const ROOM_TERMINAL = { nodes: 19_000, chars: Number.POSITIVE_INFINITY, text: 90_000 }
 type Weight = { nodes: number; chars: number; text: number }
@@ -70,18 +78,23 @@ const weightOf = (el: unknown): Weight => {
   const json = JSON.stringify(el, (_k, x: unknown) => (typeof x === 'function' ? undefined : x))
   return { nodes, chars: json?.length ?? 0, text }
 }
-// GitHub's diff palette. Dark: read off github.com 2026-10-10 (--diffBlob-*,
-// --fgColor-*, the prettylights token colours). Light: Primer's light theme
-// values, not read off a page. The row tints are alpha hex, which only a
-// remote surface paints; the terminal keeps the theme's own diff keys.
-type Palette = { addLine: string; addNum: string; delLine: string; delNum: string; fg?: string; muted: string } & Record<TokenKind, string>
-const GH_DARK: Palette = {
-  addLine: '#2ea04326', addNum: '#3fb9504d', delLine: '#f851491a', delNum: '#f851494d', fg: '#f0f6fc', muted: '#9198a1',
-  keyword: '#ff7b72', entity: '#d2a8ff', type: '#ffa657', namespace: '#7ee787', constant: '#79c0ff', string: '#a5d6ff', comment: '#9198a1',
+// The diff palette, after Astryx's Neutral theme (github.com/meta/astryx, its
+// CodeBlock's diff rows and syntax tokens, read 2026-11-25): a row is the
+// muted success or error fill, the same in the gutter and under the code; the
+// numbers and the +/- of a changed row are that hue's ink, never the grey
+// (grey on either tint measured 3.3 to 4.4:1); code keeps its token colours.
+// The row tints are alpha hex, which only a remote surface paints; the
+// terminal keeps the theme's own diff keys and their stronger gutter.
+type Palette = { addLine: string; delLine: string; addNum?: string; delNum?: string; addInk?: string; delInk?: string; fg?: string; muted: string; num?: string } & Record<TokenKind, string>
+const AX_DARK: Palette = {
+  addLine: '#90ca903d', delLine: '#ff98903d', addInk: '#90ca90', delInk: '#ffaea7', fg: '#e2e2e2', muted: '#b9b9b9', num: '#9e9e9e',
+  keyword: '#efa8ff', entity: '#a1caff', type: '#efa8ff', namespace: '#90d7c8', constant: '#ffb37e', string: '#a4d6a3', comment: '#b9b9b9',
 }
-const GH_LIGHT: Palette = {
-  addLine: '#dafbe1', addNum: '#aceebb', delLine: '#ffebe9', delNum: '#ffcecb', fg: '#1f2328', muted: '#59636e',
-  keyword: '#cf222e', entity: '#8250df', type: '#953800', namespace: '#116329', constant: '#0550ae', string: '#0a3069', comment: '#59636e',
+// light: Astryx draws its muted fills at a quarter strength over white; this
+// pane's cards are the host's off-white, where a quarter read as no tint, so 40%
+const AX_LIGHT: Palette = {
+  addLine: '#bce0bb66', delLine: '#ffc4be66', addInk: '#00490b', delInk: '#76000c', fg: '#111111', muted: '#525252', num: '#525252',
+  keyword: '#6b187c', entity: '#00458c', type: '#6b187c', namespace: '#005348', constant: '#733100', string: '#0b5615', comment: '#525252',
 }
 const BASH_DEBOUNCE_MS = 400
 const WIDE_COLS = 90
@@ -131,13 +144,13 @@ const BAND = 'userMessageBackground'
 const HOVER = 'userMessageBackgroundHover'
 const SELECTED = 'selectionBg'
 // section frames: the theme's quietest grey; the selected file's frame, the
-// theme's accent, as GitHub rings the file a link or the tree jumped to
+// stronger neutral (Astryx's emphasized border): emphasis is ink, never a hue
 const BORDER = 'subtle'
-const FOCUS = 'suggestion'
-// the reference dashboard (2026-10-14): a card is a slightly lighter fill inside
-// one hairline, with no bands inside it; one warm accent carries data, never a control
+const FOCUS = 'inactive'
+// a card is a slightly lighter fill inside one hairline, with no bands inside
+// it. No accent hue (Astryx, 2026-11-25): the share bars are the text's own
+// ink on the quiet track; colour is left to what it means (added, removed, state)
 const CARD = 'userMessageBackground'
-const ACCENT = '#ff5a2c'
 
 const GLYPH: Record<string, { ch: string; color: string }> = {
   A: { ch: 'A', color: 'success' },
@@ -1225,13 +1238,13 @@ async function panBy($: EngineInterface, key: string, by: number, max: number) {
 }
 
 // a/d: pan the hunk n/p last landed on in the selected file, else its first
-async function panCurrent($: EngineInterface, file: string, hunks: string[], by: number) {
+async function panCurrent($: EngineInterface, file: string, hunks: string[], by: number, maxOf: (text: string) => number) {
   const at = hunkCursor.key === file && hunkCursor.at < hunks.length ? hunkCursor.at : 0
   const text = hunks[at]
   if (text === undefined) return
-  const max = panMax(text)
+  const max = maxOf(text)
   if (max === 0) return $.ui.toast('Repo diffs: nothing to scroll in this change')
-  await panBy($, `${file}#${at}`, by, max)
+  await panBy($, `${file}#${hunkId(text)}`, by, max)
 }
 
 async function toggleWrap($: EngineInterface) {
@@ -1540,14 +1553,28 @@ export const register: Register = on => {
     const scope = v.scope ?? 'all'
     const isTurnFull = (await read($, turnEdits)).isFull
     const cols = e.props.bodyColumns || 80
-    // the person's theme picks GitHub's light or dark palette; unknown reads dark
+    // the person's theme picks the light or dark palette; unknown reads dark
     const themeRow = await $.config.list().then(rows => rows?.find(r => r.key === 'theme'), () => undefined)
-    const gh = /light/i.test(String(themeRow?.value ?? '')) ? GH_LIGHT : GH_DARK
+    const gh = /light/i.test(String(themeRow?.value ?? '')) ? AX_LIGHT : AX_DARK
     const pal: Palette =
       e.surface === 'terminal'
-        ? { ...gh, addLine: 'diffAddedDimmed', addNum: 'diffAdded', delLine: 'diffRemovedDimmed', delNum: 'diffRemoved', fg: undefined, muted: 'inactive' }
+        ? { ...gh, addLine: 'diffAddedDimmed', addNum: 'diffAdded', delLine: 'diffRemovedDimmed', delNum: 'diffRemoved', addInk: undefined, delInk: undefined, fg: undefined, muted: 'inactive', num: undefined }
         : gh
     const isWide = cols >= WIDE_COLS
+    // The desktop scrolls a Box sideways (overflowX); the terminal and VS Code
+    // cut at its edge, so there a cut hunk keeps the mod's own pan. The phone
+    // can scroll one too, but lifts a cut at accessibility text sizes, and one
+    // wrapped line would slide every number below it off its code; it keeps
+    // the pan until that is seen on a device (four review seats, 2026-11-25).
+    // The syntax view's Code numbers its own lines, which would scroll away
+    // with the code, so it keeps the pan as well.
+    const canScrollX = e.surface === 'desktop'
+    const nativeScroll = canScrollX && !v.wrap && !v.syntax
+    // the heavier step: the terminal has bold alone
+    const strong = e.surface === 'terminal' ? 'bold' : 'medium'
+    // kinded spans this drawing may still colour; set when a line went without
+    let spanRoom = e.surface === 'terminal' ? SPANS_TERMINAL : SPANS_REMOTE
+    let wentPlain = false
 
     // a loading placeholder that holds the room a diff takes: three dim rows,
     // so the card does not jump when the lines arrive (no spinner element exists)
@@ -1595,6 +1622,20 @@ export const register: Register = on => {
     // drawn always, dim: a control shown only under the pointer has no
     // keyboard path (impeccable audit, 2026-10-14)
     const canHover = e.surface === 'desktop'
+    // How many columns a cut line of code has to itself on this pane: the card
+    // (beside the file list on a wide pane, inside its frame unless narrow)
+    // less what stands before and after the code. Tinted rows: two number
+    // gutters, the marker bar, the padded marker, the right inset; the syntax
+    // view: its bar, the Code's own gutter, the padded marker. One more for the
+    // ellipsis a cut line ends in. The pan stops where the widest line's last
+    // column is in view of that, so a line that fits offers no pan and a narrow
+    // pane can still reach the end (v17 assumed a 20-column window everywhere).
+    const cardCols = (isWide && !shutList.includes(SEC_FILES) ? cols - Math.max(24, Math.min(40, Math.round(cols * 0.26))) - 2 : cols) - (cols < NARROW_COLS ? 0 : 2)
+    const panLimit = (text: string) => panMax(text, Math.max(8, cardCols - (v.syntax ? 1 + 5 + 3 : 2 * (gutterDigits(text) + 1) + 1 + 3 + 1) - 1))
+    // an on/off control, drawn once: the surface's outlined pill while on, a
+    // plain dim word while off (one Button either way, so its key, hotkey and
+    // press cannot drift apart between the two states)
+    const pill = (isOn: boolean) => (isOn ? ({ variant: 'secondary' } as const) : ({ plain: true, dimColor: canDim } as const))
     // the file list's own width: beside the card it is a fraction of the pane
     // a quarter of the pane, not a third: the diff is what is read (Codex, 2026-10-14)
     const treeCols = isWide ? Math.max(24, Math.min(40, Math.round(cols * 0.26))) : cols
@@ -1615,7 +1656,11 @@ export const register: Register = on => {
     // letter hotkeys pause while a comment is typed
     // the draft's box is drawn only on its own file's card: elsewhere it is kept
     // (and back on return) but must not hold the keys
-    const isComposerShown = comp !== null && Boolean(selFile) && comp.root === repo.root && comp.path === selPath
+    // and only while its field is really drawn: a folded card, or a surface with
+    // no text field, shows no editor, so a kept draft must not pause the keys there
+    const isComposerShown =
+      comp !== null && Input !== null && Boolean(selFile) && comp.root === repo.root && comp.path === selPath &&
+      Boolean(v.selected && selFile && isOpenFile(v, v.selected, selFile, marks, openList))
     // an editor opened on another surface (the phone draws no field) holds no keys here
     const isTyping = isComposerShown || (Input !== null && (isEditingHide || isEditingBase))
     const hk = (key: string) => (isTyping ? undefined : key)
@@ -1626,16 +1671,16 @@ export const register: Register = on => {
     // the reference's delta chip: a tinted pill around a bold figure
     const chip = (text: string, tint: string, color: string | undefined) => (
       <Box paddingX={1} backgroundColor={tint}>
-        <Text color={color} bold>
+        <Text color={color} weight="semibold" tabular>
           {text}
         </Text>
       </Box>
     )
     const chips = (added: number, removed: number) => (
       <Box flexDirection="row" columnGap={1}>
-        {/* plain bold text on the tint: red text on the red tint over a card fill measured 4.3:1 */}
-        {added > 0 && chip(`+${grouped(added)}`, 'diffAdded', undefined)}
-        {removed > 0 && chip(`−${grouped(removed)}`, 'diffRemoved', undefined)}
+        {/* Astryx's badge: the hue's ink on its own muted fill (measured 2026-11-25, see README v25); the terminal, with no ink, keeps plain bold text on the theme's tint */}
+        {added > 0 && chip(`+${grouped(added)}`, pal.addInk ? pal.addLine : 'diffAdded', pal.addInk)}
+        {removed > 0 && chip(`−${grouped(removed)}`, pal.delInk ? pal.delLine : 'diffRemoved', pal.delInk)}
         {added === 0 && removed === 0 && chip('±0', HOVER, 'inactive')}
       </Box>
     )
@@ -1772,10 +1817,10 @@ export const register: Register = on => {
             shrinks, so a narrow pane puts the totals on their own line */}
         <Box flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={2}>
           <Box flexDirection="row" flexWrap="wrap" columnGap={1} flexShrink={1} minWidth={0} overflow="hidden">
-            <Button key="hdr-fold" plain dimColor={canDim} onPress={() => toggleShut($, SEC_HEADER)}>
+            <Button key="hdr-fold" label={isHeaderShut ? 'show details' : 'hide details'} plain dimColor={canDim} onPress={() => toggleShut($, SEC_HEADER)}>
               {isHeaderShut ? '▸' : '▾'}
             </Button>
-            <Text bold wrap="truncate-end">
+            <Text weight="semibold" wrap="truncate-end">
               {repo.name}
             </Text>
             <Text color="inactive" wrap="truncate-middle">
@@ -1798,15 +1843,9 @@ export const register: Register = on => {
             {isHeaderShut && pr && prCompact(pr)}
             <Text color="inactive">{plural(files.length, 'file')}</Text>
             {chips(totalAdded, totalRemoved)}
-            {isShowingKeys ? (
-              <Button key="keys" variant="secondary" hotkey={hk(KEY_LEGEND)} onPress={() => update($, showKeys, k => !k)}>
-                keys
-              </Button>
-            ) : (
-              <Button key="keys" plain dimColor={canDim} hotkey={hk(KEY_LEGEND)} onPress={() => update($, showKeys, k => !k)}>
-                keys
-              </Button>
-            )}
+            <Button key="keys" {...pill(isShowingKeys)} hotkey={hk(KEY_LEGEND)} onPress={() => update($, showKeys, k => !k)}>
+              keys
+            </Button>
             {/* one control: the live dot, the last refresh and the arrow that refreshes */}
             <Button key="refresh" plain dimColor={canDim} hotkey={isTyping ? undefined : 'r'} onPress={() => refresh($)}>
               <Text color={live.color}>●</Text>
@@ -1821,7 +1860,7 @@ export const register: Register = on => {
           <Box flexDirection="column" paddingX={1} backgroundColor={HOVER}>
             {/* two columns once the pane is wide enough: half the rows (impeccable, 2026-10-14) */}
             {(() => {
-              const legend = legendRows({ tabs: snaps.length > 1, hunks: true })
+              const legend = legendRows({ tabs: snaps.length > 1, hunks: true }).filter(r => !nativeScroll || !r.key.startsWith(`${KEY_PAN_LEFT} /`))
               const half = cols >= 70 ? Math.ceil(legend.length / 2) : legend.length
               const col = (list: typeof legend) => (
                 <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
@@ -2036,7 +2075,7 @@ export const register: Register = on => {
           {isWide && treeCols >= 36 && !isPlainSel && !n.file.isBinary && n.file.status !== '?' && maxChange > 0 && (
             <Box flexShrink={0}>
               <Text>
-                <Text color={ACCENT}>{'▬'.repeat(Math.max(1, Math.round((BAR_CELLS * (n.file.added + n.file.removed)) / maxChange)))}</Text>
+                <Text>{'▬'.repeat(Math.max(1, Math.round((BAR_CELLS * (n.file.added + n.file.removed)) / maxChange)))}</Text>
                 <Text color="subtle">{'▬'.repeat(BAR_CELLS - Math.max(1, Math.round((BAR_CELLS * (n.file.added + n.file.removed)) / maxChange)))}</Text>
               </Text>
             </Box>
@@ -2360,43 +2399,108 @@ export const register: Register = on => {
       const { runs } = hunkRuns(text)
       const last = Math.max(1, ...runs.map(r => Math.max(r.oldStart, r.newStart) + r.lines.length))
       const width = String(last).length
-      const wrap = v.wrap ? 'wrap' : 'truncate-end'
-      // each line: its padded marker, then its code in GitHub's token colours
-      const codeOf = (lines: string[]) =>
+      // a scrolling block never cuts: clip leaves no ellipsis claiming the line ends there
+      const wrap = v.wrap ? 'wrap' : nativeScroll ? 'clip' : 'truncate-end'
+      const tintOf = (kind: HunkRun['kind']) => (kind === 'add' ? pal.addLine : kind === 'del' ? pal.delLine : undefined)
+      // the terminal's stronger gutter; a remote surface draws the row's one tint through it
+      const numTintOf = (kind: HunkRun['kind']) => (kind === 'add' ? pal.addNum : kind === 'del' ? pal.delNum : undefined)
+      // a changed row's numbers and marker are its hue's ink (Astryx's CodeBlock);
+      // the terminal, with no ink of its own, keeps the text colour. An unchanged
+      // row's numbers are the quiet grey, which sits on no tint there
+      const inkOf = (kind: HunkRun['kind']) => (kind === 'add' ? (pal.addInk ?? pal.fg) : kind === 'del' ? (pal.delInk ?? pal.fg) : (pal.num ?? pal.muted))
+      const isCtx = (kind: HunkRun['kind']) => kind === 'ctx'
+      // weight is the one hierarchy inside a row: changed rows a step heavier
+      // than context (regular code read thin on the tints, measured v12);
+      // numbers never heavy. The terminal has regular and bold only.
+      const weightOf = (kind: HunkRun['kind']) => (isCtx(kind) ? 'regular' : strong)
+      // each line's code in its token colours; with its padded marker in front
+      // unless the marker is pinned beside the numbers (a scrolling block)
+      const codeOf = (lines: string[], hasMarker: boolean) =>
         lines.flatMap((l, k) => {
           const head = k > 0 ? '\n' : ''
-          if (l.startsWith('\\')) return [`${head}${l}`]
-          return [
-            `${head} ${l.slice(0, 1)} `,
-            ...panTokens(highlightLine(l.slice(1), path), off).map(t => (t.kind ? <Text color={pal[t.kind]}>{t.text}</Text> : t.text)),
-          ]
+          if (l.startsWith('\\')) return [`${head}${hasMarker ? '' : ' '}${l}`]
+          const lead = hasMarker ? `${head} ${l.slice(0, 1)} ` : `${head} `
+          const code = l.slice(1)
+          const toks = code.length > LINE_HIGHLIGHT_CAP ? null : highlightLine(code, path)
+          const spans = toks ? toks.reduce((n, t) => n + (t.kind ? 1 : 0), 0) : 0
+          // no room left for this line's colours, or too long to colour: the text colour
+          if (!toks || spans > spanRoom) {
+            wentPlain = true
+            return [lead + panTokens([{ text: code }], off).map(t => t.text).join('')]
+          }
+          spanRoom -= spans
+          return [lead, ...panTokens(toks, off).map(t => (t.kind ? <Text color={pal[t.kind]}>{t.text}</Text> : t.text))]
         })
-      // weight is the one hierarchy this surface has: changed rows stay bold
-      // (the desktop's code face reads thin on the tints, measured v12), the
-      // unchanged context recedes to regular weight; numbers never bold
-      const isCtx = (kind: HunkRun['kind']) => kind === 'ctx'
       // never inactive + dim on one text: stacked they fell under 4.5:1 in the
       // harness (impeccable detect, 2026-10-14); one or the other
       // two gutters, old then new, as GitHub draws them: a removed line has
       // only an old number, an added one only a new, context both. One
       // column could not say which file a number counts (impeccable, 2026-10-14)
       const gutter = (kind: HunkRun['kind'], nums: string[], key: string) => (
-        <Box key={key} flexShrink={0} paddingLeft={1} backgroundColor={kind === 'add' ? pal.addNum : kind === 'del' ? pal.delNum : undefined}>
-          <Text color={isCtx(kind) ? pal.muted : pal.fg}>
+        <Box key={key} flexShrink={0} paddingLeft={1} backgroundColor={numTintOf(kind)}>
+          <Text color={inkOf(kind)} size="body" mono tabular wrap={nativeScroll ? 'clip' : undefined}>
             {nums.join('\n')}
           </Text>
         </Box>
       )
+      // a "\ No newline" line takes no number; the side a run does not touch is blank
+      const numbersOf = (r: HunkRun) => {
+        let oldNo = r.oldStart
+        let newNo = r.newStart
+        return {
+          olds: r.lines.map(l => (l.startsWith('\\') || r.kind === 'add' ? '' : String(oldNo++)).padStart(width)),
+          news: r.lines.map(l => (l.startsWith('\\') || r.kind === 'del' ? '' : String(newNo++)).padStart(width)),
+        }
+      }
+      if (nativeScroll) {
+        // Sideways scroll (desktop): the numbers and the +/- stay put in
+        // their own column and the code scrolls beside them, every run of the
+        // hunk together. Both columns are built from the same runs, one line a
+        // row in each, in the same face and size, so a number never leaves its
+        // line. Each run's Box is at least the hunk's widest line across, so a
+        // short row's tint reaches as far as the longest line scrolls.
+        const cells = hunkCells(text) + 2
+        return (
+          <Box flexDirection="row" minWidth={0}>
+            <Box flexDirection="column" flexShrink={0}>
+              {runs.map((r, j) => {
+                const { olds, news } = numbersOf(r)
+                const key = `tgut:${i}:${j}`
+                return (
+                  <Box key={key} flexDirection="row" backgroundColor={tintOf(r.kind)}>
+                    {gutter(r.kind, olds, `${key}:o`)}
+                    {gutter(r.kind, news, `${key}:n`)}
+                    <Box flexShrink={0} paddingX={1}>
+                      <Text color={inkOf(r.kind)} size="body" weight={weightOf(r.kind)} mono wrap="clip">
+                        {r.lines.map(l => (l.startsWith('+') || l.startsWith('-') ? l.slice(0, 1) : ' ')).join('\n')}
+                      </Text>
+                    </Box>
+                  </Box>
+                )
+              })}
+            </Box>
+            <Box key={`scroll:${i}`} flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0} overflowX="scroll">
+              {runs.map((r, j) => (
+                <Box key={`trun:${i}:${j}`} flexShrink={0} minWidth={cells} paddingRight={1} backgroundColor={tintOf(r.kind)}>
+                  <Text key={`diff:trun:${i}:${j}`} color={pal.fg} size="body" weight={weightOf(r.kind)} mono wrap={wrap}>
+                    {codeOf(r.lines, false)}
+                  </Text>
+                </Box>
+              ))}
+            </Box>
+          </Box>
+        )
+      }
       // a cell of air at the row's right edge: code never touches the card's frame (impeccable detect, 2026-10-14)
       const rowOf = (kind: HunkRun['kind'], olds: string[], news: string[], lines: string[], key: string) => (
-        <Box key={key} flexDirection="row" minWidth={0} paddingRight={1} backgroundColor={kind === 'add' ? pal.addLine : kind === 'del' ? pal.delLine : undefined}>
+        <Box key={key} flexDirection="row" minWidth={0} paddingRight={1} backgroundColor={tintOf(kind)}>
           {gutter(kind, olds, `${key}:o`)}
           {gutter(kind, news, `${key}:n`)}
-          <Box width={1} flexShrink={0} backgroundColor={kind === 'add' ? pal.addNum : kind === 'del' ? pal.delNum : undefined} />
+          <Box width={1} flexShrink={0} backgroundColor={numTintOf(kind)} />
           <Box flexGrow={1} flexShrink={1} minWidth={0}>
             {/* context: regular weight, never dim: dim over the token colours fell to 4.2:1 (impeccable detect) */}
-            <Text key={`diff:${key}`} color={pal.fg} bold={!isCtx(kind)} wrap={wrap}>
-              {codeOf(lines)}
+            <Text key={`diff:${key}`} color={pal.fg} weight={weightOf(kind)} mono wrap={wrap}>
+              {codeOf(lines, true)}
             </Text>
           </Box>
         </Box>
@@ -2404,11 +2508,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {runs.flatMap((r, j) => {
-            // a "\ No newline" line takes no number; the side a run does not touch is blank
-            let oldNo = r.oldStart
-            let newNo = r.newStart
-            const olds = r.lines.map(l => (l.startsWith('\\') || r.kind === 'add' ? '' : String(oldNo++)).padStart(width))
-            const news = r.lines.map(l => (l.startsWith('\\') || r.kind === 'del' ? '' : String(newNo++)).padStart(width))
+            const { olds, news } = numbersOf(r)
             const key = `trun:${i}:${j}`
             return v.wrap
               ? r.lines.map((l, k) => rowOf(r.kind, [olds[k]!], [news[k]!], [l], `${key}:${k}`))
@@ -2424,7 +2524,7 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {runs.map((r, j) => (
-            // GitHub's tint is on the gutter, the code on the surface's own
+            // the tint is on the gutter, the code on the surface's own
             // background: a Code paints its own, so a tinted Box behind it only
             // showed as a slab past the code's end. The bar is the tint here.
             <Box key={`run:${i}:${j}`} flexDirection="row" minWidth={0}>
@@ -2448,54 +2548,44 @@ export const register: Register = on => {
     // the way back must stay on screen
     const scopePills = (
       <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-        {SCOPES.map(x =>
-          x.value === scope ? (
-            <Button key={`scope:${x.value}`} variant="secondary" onPress={() => pickScope($, x.value)}>
-              {x.label}
-            </Button>
-          ) : (
-            <Button key={`scope:${x.value}`} plain dimColor={canDim} onPress={() => pickScope($, x.value)}>
-              {x.label}
-            </Button>
-          ),
-        )}
+        {SCOPES.map(x => (
+          <Button key={`scope:${x.value}`} {...pill(x.value === scope)} onPress={() => pickScope($, x.value)}>
+            {x.label}
+          </Button>
+        ))}
         <Box width={1} />
-        {opts.ignoreWhitespace ? (
-          <Button key="ws" variant="secondary" hotkey={hk(KEY_IGNORE_WHITESPACE)} onPress={() => toggleWhitespace($)}>
-            no whitespace
-          </Button>
-        ) : (
-          <Button key="ws" plain dimColor={canDim} hotkey={hk(KEY_IGNORE_WHITESPACE)} onPress={() => toggleWhitespace($)}>
-            ignore whitespace
-          </Button>
-        )}
+        <Button key="ws" {...pill(opts.ignoreWhitespace)} hotkey={hk(KEY_IGNORE_WHITESPACE)} onPress={() => toggleWhitespace($)}>
+          {opts.ignoreWhitespace ? 'no whitespace' : 'ignore whitespace'}
+        </Button>
         {scope === 'turn' && isTurnFull && (
           <Text color="warning">{`This turn edited more than ${LAST_TURN_CAP} files; the list keeps the first ${LAST_TURN_CAP}.`}</Text>
         )}
       </Box>
     )
+    // the toolbar's pan (keys a/d): only while a change of the selected file has a line cut short
+    const canPanSel = selHunks > 0 && !v.wrap && !nativeScroll && selPlan!.shown.some(h => panLimit(h.text) > 0)
     const toolbar = (
       <Box flexDirection="column" paddingX={1}>
         <Box flexDirection="row" flexWrap="wrap" columnGap={2} justifyContent="space-between">
           {scopePills}
           {order.length > 0 && (
           <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
-            <Button key="prev" plain dimColor={canDim} hotkey={hk('k')} onPress={() => step($, -1)}>
+            <Button key="prev" label="previous file" plain dimColor={canDim} hotkey={hk('k')} onPress={() => step($, -1)}>
               ‹
             </Button>
             <Box flexShrink={0}>
               <Text color="inactive">{`${selIndex + 1}/${order.length}`}</Text>
             </Box>
-            <Button key="next" plain dimColor={canDim} hotkey={hk('j')} onPress={() => step($, 1)}>
+            <Button key="next" label="next file" plain dimColor={canDim} hotkey={hk('j')} onPress={() => step($, 1)}>
               ›
             </Button>
             {selHunks > 1 && (
-              <Button key="hunk-prev" plain dimColor={canDim} hotkey={hk('p')} onPress={() => stepHunk($, -1, selHunks, v.selected!)}>
+              <Button key="hunk-prev" label="previous change" plain dimColor={canDim} hotkey={hk('p')} onPress={() => stepHunk($, -1, selHunks, v.selected!)}>
                 ↑
               </Button>
             )}
             {selHunks > 1 && (
-              <Button key="hunk-next" plain dimColor={canDim} hotkey={hk('n')} onPress={() => stepHunk($, 1, selHunks, v.selected!)}>
+              <Button key="hunk-next" label="next change" plain dimColor={canDim} hotkey={hk('n')} onPress={() => stepHunk($, 1, selHunks, v.selected!)}>
                 ↓
               </Button>
             )}
@@ -2503,56 +2593,38 @@ export const register: Register = on => {
             <Button key="fold-all" plain dimColor={canDim} onPress={() => foldAll($, isAllFolded ? viewedKeys : allKeys, !isAllFolded)}>
               {isAllFolded ? '▾ expand all' : '▸ collapse all'}
             </Button>
-            {isShowingOptions ? (
-              <Button key="options" variant="secondary" onPress={() => update($, showOptions, o => !o)}>
-                options
-              </Button>
-            ) : (
-              <Button key="options" plain dimColor={canDim} onPress={() => update($, showOptions, o => !o)}>
-                options
-              </Button>
-            )}
+            <Button key="options" {...pill(isShowingOptions)} onPress={() => update($, showOptions, o => !o)}>
+              options
+            </Button>
           </Box>
           )}
         </Box>
         {order.length > 0 && isShowingOptions && (
           <Box flexDirection="row" flexWrap="wrap" columnGap={1} marginTop={1}>
             {/* context: stepper; wrap and syntax colours: pills, filled while on */}
-            <Button key="ctx-less" plain dimColor={canDim} hotkey={hk(KEY_LESS_CONTEXT)} onPress={() => stepContextBy($, -1)}>
+            <Button key="ctx-less" label="less context" plain dimColor={canDim} hotkey={hk(KEY_LESS_CONTEXT)} onPress={() => stepContextBy($, -1)}>
               −
             </Button>
             <Box flexShrink={0}>
               <Text color="inactive">{optionsLabel(opts)}</Text>
             </Box>
-            <Button key="ctx-more" plain dimColor={canDim} hotkey={hk(KEY_MORE_CONTEXT)} onPress={() => stepContextBy($, 1)}>
+            <Button key="ctx-more" label="more context" plain dimColor={canDim} hotkey={hk(KEY_MORE_CONTEXT)} onPress={() => stepContextBy($, 1)}>
               +
             </Button>
             <Box width={1} />
-            {v.wrap ? (
-              <Button key="wrap" variant="secondary" hotkey={hk('w')} onPress={() => toggleWrap($)}>
-                wrap lines
-              </Button>
-            ) : (
-              <Button key="wrap" plain dimColor={canDim} hotkey={hk('w')} onPress={() => toggleWrap($)}>
-                wrap lines
-              </Button>
-            )}
-            {v.syntax ? (
-              <Button key="numbers" variant="secondary" hotkey={hk(KEY_NUMBERS)} onPress={() => toggleSyntax($)}>
-                syntax colours
-              </Button>
-            ) : (
-              <Button key="numbers" plain dimColor={canDim} hotkey={hk(KEY_NUMBERS)} onPress={() => toggleSyntax($)}>
-                syntax colours
-              </Button>
-            )}
-            {selHunks > 0 && !v.wrap && (
-              <Button key="pan-left" plain dimColor={canDim} hotkey={hk(KEY_PAN_LEFT)} onPress={() => panCurrent($, v.selected!, selPlan!.shown.map(h => h.text), -PAN_STEP)}>
+            <Button key="wrap" {...pill(Boolean(v.wrap))} hotkey={hk('w')} onPress={() => toggleWrap($)}>
+              wrap lines
+            </Button>
+            <Button key="numbers" {...pill(Boolean(v.syntax))} hotkey={hk(KEY_NUMBERS)} onPress={() => toggleSyntax($)}>
+              syntax colours
+            </Button>
+            {canPanSel && (
+              <Button key="pan-left" plain dimColor={canDim} hotkey={hk(KEY_PAN_LEFT)} onPress={() => panCurrent($, v.selected!, selPlan!.shown.map(h => h.text), -PAN_STEP, panLimit)}>
                 ‹ scroll
               </Button>
             )}
-            {selHunks > 0 && !v.wrap && (
-              <Button key="pan-right" plain dimColor={canDim} hotkey={hk(KEY_PAN_RIGHT)} onPress={() => panCurrent($, v.selected!, selPlan!.shown.map(h => h.text), PAN_STEP)}>
+            {canPanSel && (
+              <Button key="pan-right" plain dimColor={canDim} hotkey={hk(KEY_PAN_RIGHT)} onPress={() => panCurrent($, v.selected!, selPlan!.shown.map(h => h.text), PAN_STEP, panLimit)}>
                 scroll ›
               </Button>
             )}
@@ -2565,6 +2637,7 @@ export const register: Register = on => {
       const fileKey = keyOf(repo.root, f.path)
       const path = f.path
       const isSel = fileKey === v.selected
+      wentPlain = false
       // the selected container keeps the plain keys (and the hotkeys); the others' carry their file
       const kk = (k: string) => (isSel ? k : `${k}@${fileKey}`)
       const g = glyphOf(f.status)
@@ -2595,7 +2668,7 @@ export const register: Register = on => {
             {/* the counts wrap under the path on a narrow pane rather than past its edge */}
             <Box flexDirection="row" flexWrap="wrap" columnGap={1} flexGrow={1} flexShrink={1} minWidth={0} overflow="hidden">
               <Box flexShrink={0}>
-                <Button key={kk('fold')} plain dimColor={canDim} onPress={() => toggleFold($, fileKey, isOpen)}>
+                <Button key={kk('fold')} label={isOpen ? `collapse ${basename(path)}` : `expand ${basename(path)}`} plain dimColor={canDim} onPress={() => toggleFold($, fileKey, isOpen)}>
                   {isOpen ? '▾' : '▸'}
                 </Button>
               </Box>
@@ -2611,7 +2684,7 @@ export const register: Register = on => {
                     the name is what is reviewed, the path supports it */}
                 <Box flexShrink={1} minWidth={0}>
                   {isSel ? (
-                    <Text bold>{basename(path)}</Text>
+                    <Text weight="semibold">{basename(path)}</Text>
                   ) : (
                     <Button key={kk('pick')} plain onPress={() => select($, fileKey)}>
                       {basename(path)}
@@ -2723,7 +2796,7 @@ export const register: Register = on => {
                   ))}
                 </Box>
               )}
-              {isLoaded && plan && !plan.isOver && !f.isBinary && !isBinaryText && shown.length === 0 && notes.length === 0 && (
+              {isLoaded && plan && !plan.isOver && plan.hidden === 0 && !f.isBinary && !isBinaryText && shown.length === 0 && notes.length === 0 && (
                 <Box paddingX={1} paddingY={1}>
                   <Text dimColor={canDim}>No text changes.</Text>
                 </Box>
@@ -2734,8 +2807,11 @@ export const register: Register = on => {
                 const here = fileComments.filter(c => isHere(c) && hunkHolds(hunk.text, c.line, c.side))
                 const isComposing = composerHunk === i
                 // sideways pan: cut mode only; wrapping already shows every column
-                const panKey = `${fileKey}#${i}`
-                const maxOff = v.wrap ? 0 : panMax(hunk.text)
+                // named by where its first change sits in the old file, not by its place in
+                // the list: a refresh that adds a hunk above must not hand this one's fold
+                // or pan to its neighbour
+                const panKey = `${fileKey}#${hunkId(hunk.text)}`
+                const maxOff = v.wrap || nativeScroll ? 0 : panLimit(hunk.text)
                 const off = Math.min(pans[panKey] ?? 0, maxOff)
                 // folded on its chevron: the band stays, the lines go
                 const isHunkShut = shutList.includes(`hunk:${panKey}`)
@@ -2751,18 +2827,18 @@ export const register: Register = on => {
                     {
                       // GitHub's one band per hunk: its chevron, range and function beside copy and comment
                       // each hunk's band defines it, except right under the card's own band, so bands never stack into a slab
-                      <Box key={`meta:${i}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" gap={1} paddingX={1} hover={{ backgroundColor: HOVER }}>
-                        <Box flexDirection="row" gap={1} flexShrink={1} minWidth={0} overflow="hidden">
+                      <Box key={`meta:${i}`} flexDirection="row" flexWrap="wrap" justifyContent="space-between" columnGap={1} paddingX={1} hover={{ backgroundColor: HOVER }}>
+                        <Box flexDirection="row" gap={1} alignItems="center" flexShrink={1} minWidth={0} overflow="hidden">
                           <Box flexShrink={0}>
-                            <Button key={kk(`hunkfold:${i}`)} plain dimColor={canDim} onPress={() => toggleShut($, `hunk:${panKey}`)}>
+                            <Button key={kk(`hunkfold:${i}`)} label={isHunkShut ? 'expand change' : 'collapse change'} plain dimColor={canDim} onPress={() => toggleShut($, `hunk:${panKey}`)}>
                               {isHunkShut ? '▸' : '▾'}
                             </Button>
                           </Box>
                           <Box flexShrink={0}>
-                            <Text color="inactive">{hunkRange(hunk.text)}</Text>
+                            <Text color="inactive" size="footnote" mono>{hunkRange(hunk.text)}</Text>
                           </Box>
                           {ctx && (
-                            <Text color="inactive" wrap="truncate-end">
+                            <Text color="inactive" size="footnote" mono wrap="truncate-end">
                               {`in ${ctx}`}
                             </Text>
                           )}
@@ -2772,7 +2848,7 @@ export const register: Register = on => {
                           // wraps on a pane too narrow for the row (17-21 columns at 18 px): no control is cut
                           <Box flexDirection="row" flexWrap="wrap" columnGap={1} flexShrink={1} minWidth={0}>
                             {maxOff > 0 && (
-                              <Button key={kk(`panl:${i}`)} plain dimColor={canDim || off === 0} onPress={() => panBy($, panKey, -PAN_STEP, maxOff)}>
+                              <Button key={kk(`panl:${i}`)} label="scroll left" plain dimColor={canDim || off === 0} onPress={() => panBy($, panKey, -PAN_STEP, maxOff)}>
                                 ‹
                               </Button>
                             )}
@@ -2782,7 +2858,7 @@ export const register: Register = on => {
                               </Box>
                             )}
                             {maxOff > 0 && (
-                              <Button key={kk(`panr:${i}`)} plain dimColor={canDim || off >= maxOff} onPress={() => panBy($, panKey, PAN_STEP, maxOff)}>
+                              <Button key={kk(`panr:${i}`)} label="scroll right" plain dimColor={canDim || off >= maxOff} onPress={() => panBy($, panKey, PAN_STEP, maxOff)}>
                                 ›
                               </Button>
                             )}
@@ -2823,6 +2899,12 @@ export const register: Register = on => {
                   </Box>
                 )
               })}
+              {/* read after the hunks above are built: whether one of their lines went without colours */}
+              {wentPlain && (
+                <Box paddingX={1}>
+                  <Text color="inactive">Some lines here are drawn without syntax colours: more than this pane colours at once.</Text>
+                </Box>
+              )}
               {isComposingHere && composerHunk === -1 && comp && composer(comp)}
               {unplaced.length > 0 && (
                 <Box flexDirection="column" marginTop={1}>

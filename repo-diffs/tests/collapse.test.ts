@@ -46,7 +46,8 @@ async function allWords(ui: { find: (q: { type: string }) => Promise<unknown> })
 test('each hunk folds on its own chevron: the band stays, its lines go, and the other hunk is untouched', async ($, on) => {
   wire(on, ['src/a.ts'])
   await $.tool.call(EDIT)
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  // the terminal: one Text a run with the marker in it (the desktop pins the marker beside the numbers)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   // tinted rows pad the marker: ` + new2`
   expect(await allWords(ui)).toContain(' + new2')
   await ui.press({ key: 'hunkfold:0' })
@@ -55,9 +56,31 @@ test('each hunk folds on its own chevron: the band stays, its lines go, and the 
   expect(folded).toContain(' + new2')
   // the band keeps its range, so the fold reads as a fold
   expect(await ui.find({ text: /^@@ -1,2 \+1,2 @@$/ })).toBeDefined()
-  expect((await ui.find({ key: 'hunkfold:0' }))?.props.label).toBe('▸')
+  expect((await ui.find({ key: 'hunkfold:0' }))?.text).toBe('▸')
+  // the glyph is what is drawn; the label names the control
+  expect((await ui.find({ key: 'hunkfold:0' }))?.props.label).toBe('expand change')
   await ui.press({ key: 'hunkfold:0' })
   expect(await allWords(ui)).toMatch(/1 \+ new2/)
+  await ui.unmount()
+})
+
+test('v26: a folded hunk stays folded, and its neighbour open, when a refresh adds a hunk above it', async ($, on) => {
+  let patch = PATCH_TWO
+  wire(on, ['src/a.ts'], a => (a.includes('base000 -- src/a.ts') ? ok(patch) : null))
+  await $.tool.call(EDIT)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await ui.press({ key: 'hunkfold:1' })
+  expect((await ui.find({ key: 'hunkfold:1' }))?.text).toBe('▸')
+  // another session edits line 10: the folded hunk is now the third
+  patch = PATCH_TWO.replace('@@ -20,2', '@@ -10,2 +10,2 @@\n-mid\n+MID\n z\n@@ -20,2')
+  await ui.press({ key: 'refresh' })
+  expect(await allWords(ui)).toContain(' + MID')
+  expect((await ui.find({ key: 'hunkfold:1' }))?.text).toBe('▾')
+  expect((await ui.find({ key: 'hunkfold:2' }))?.text).toBe('▸')
+  // its lines stay gone (the number then the padded marker: `20 + new2`)
+  expect(await allWords(ui)).not.toMatch(/20 \+ new2/)
+  await ui.press({ key: 'hunkfold:2' })
+  expect(await allWords(ui)).toMatch(/20 \+ new2/)
   await ui.unmount()
 })
 
@@ -77,12 +100,12 @@ test('the file list folds to its title line and gives the diff the whole width; 
   expect(await ui.find({ key: `btn:${K('src/a.ts')}` })).toBeDefined()
 
   // v21: the header starts folded to its first line; opening the base picker unfolds it
-  expect((await ui.find({ key: 'hdr-fold' }))?.props.label).toBe('▸')
+  expect((await ui.find({ key: 'hdr-fold' }))?.text).toBe('▸')
   expect(await ui.find({ key: 'refresh' })).toBeDefined()
   expect(await ui.find({ text: /^1 file$/ })).toBeDefined()
   await ui.press({ key: 'base-menu' })
   expect(await ui.find({ key: 'base:auto' })).toBeDefined()
-  expect((await ui.find({ key: 'hdr-fold' }))?.props.label).toBe('▾')
+  expect((await ui.find({ key: 'hdr-fold' }))?.text).toBe('▾')
   await ui.press({ key: 'hdr-fold' })
   expect(await ui.find({ key: 'base:auto' })).toBeUndefined()
   // the scope lives on the toolbar (v20), so it stays reachable folded or not

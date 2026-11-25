@@ -34,6 +34,19 @@ MUTANTS = [
     ("raw-path-key", REGISTER, "      const key = await gitKeyOf($, edited)", "      const key = edited"),
     ("commit-in-turn", REGISTER, "const commit = view.commit && scope !== 'turn' ?", "const commit = view.commit ?"),
     ("subagent-turn-resets", REGISTER, '    if (e.agentId === undefined) {\n      await update($, turnEdits', "    if (e.agentId === undefined || e.text !== '\\u0000') {\n      await update($, turnEdits"),
+    # v25: sideways scroll, the false "No text changes.", a kept draft holding the keys
+    ("scroll-on-every-surface", REGISTER, "const canScrollX = e.surface === 'desktop'", "const canScrollX = true"),
+    ("tint-stops-at-the-window", REGISTER, "flexShrink={0} minWidth={cells} paddingRight={1}", "flexShrink={0} paddingRight={1}"),
+    ("marker-scrolls-away", REGISTER, "{codeOf(r.lines, false)}", "{codeOf(r.lines, true)}"),
+    ("hidden-hunk-reads-no-changes", REGISTER, "!plan.isOver && plan.hidden === 0 && !f.isBinary", "!plan.isOver && !f.isBinary"),
+    ("folded-draft-holds-keys", REGISTER, "      Boolean(v.selected && selFile && isOpenFile(v, v.selected, selFile, marks, openList))\n", "      true\n"),
+    ("glyph-unnamed", REGISTER, '<Button key="next" label="next file" plain', '<Button key="next" plain'),
+    # v26: a hunk's fold and pan follow the hunk, not its place in the list
+    ("hunk-state-by-index", REGISTER, "const panKey = `${fileKey}#${hunkId(hunk.text)}`", "const panKey = `${fileKey}#${i}`"),
+    # v27: the pan stops where the line ends in the real window; syntax colours are bounded
+    ("pan-window-fixed", REGISTER, "const maxOff = v.wrap || nativeScroll ? 0 : panLimit(hunk.text)", "const maxOff = v.wrap || nativeScroll ? 0 : panMax(hunk.text)"),
+    ("span-room-unbounded", REGISTER, "if (!toks || spans > spanRoom) {", "if (!toks) {"),
+    ("minified-line-coloured", REGISTER, "const toks = code.length > LINE_HIGHLIGHT_CAP ? null : highlightLine(code, path)", "const toks = highlightLine(code, path)"),
     ("turn-never-resets", REGISTER, 't => ({ gen: (t?.gen ?? 0) + 1, paths: [], isFull: false })', 't => ({ gen: (t?.gen ?? 0) + 1, paths: t?.paths ?? [], isFull: false })'),
 ]
 unknown = set(sys.argv[1:]) - {m[0] for m in MUTANTS}

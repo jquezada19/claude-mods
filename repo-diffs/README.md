@@ -274,7 +274,9 @@ session's cwd repo.
   Keys `a` / `d` (toolbar `‹ scroll` / `scroll ›`) pan the change `n`/`p` last
   landed on, else the selected file's first; `h`/`l` were already the legend
   and less context. (now: "cut mode" is `wrap lines` off; the toolbar's
-  `‹ scroll` / `scroll ›` sit on the options row.)
+  `‹ scroll` / `scroll ›` sit on the options row. Since v25 the desktop
+  scrolls the block itself and draws none of these; the pan is what the
+  terminal, VS Code and the phone keep.)
 - **Simpler pane** (v18, 2026-10-14, after a 300-file change set): the
   header is one line (`▾ repo branch → base ▾ · N files +a −r ■■■■■ ? ● ↻ time`;
   the live dot and last refresh sit on the refresh button, "stale" or
@@ -426,6 +428,104 @@ session's cwd repo.
   as the engine counts it (it had the page offset in it). Checked in the
   harness at 420 px: the row stays put through 1,680 px of scroll, opens to a
   9-row window, and four wheels over it move the list with the pane still.
+- **Sideways scroll and the Astryx look** (v25, 0.5.0, 2026-11-25; asked for:
+  scroll right and left inside a code block, the design language of
+  github.com/meta/astryx, a review by several model seats):
+  - **Scroll.** With `wrap lines` off, the desktop draws each hunk as two
+    columns: the old and new numbers and the `+`/`−` in a column that stays
+    put, and the code beside it in a Box with `overflowX="scroll"`, every run
+    of the hunk scrolling together (the engine's own sideways scroll, which
+    v17 did not have). The code Text is `wrap="clip"`: no ellipsis claims a
+    line ends where the window does. Each run's Box has `minWidth` = the
+    hunk's widest line in cells (`hunkCells`: a tab to the next eighth column,
+    a wide glyph two, a joiner none) plus a cell of air either side, so a short
+    row's tint reaches as far as the longest line scrolls. Both columns are
+    built from the same runs, one line a row, same face and size. The
+    terminal and VS Code cannot scroll a Box and keep v17's pan (`‹ col N ›`,
+    keys `a`/`d`); so does the phone, which lifts a cut at accessibility text
+    sizes, where one wrapped line would slide every number below it off its
+    code; and so does the syntax view, whose `Code` numbers its own lines. On
+    the desktop the pan's buttons, keys and legend row are not drawn.
+  - **Look, after Astryx's Neutral theme** (its tokens and its CodeBlock's
+    diff rows, read from the repo, nothing installed). Surfaces, frames and
+    status colours stay the host theme's keys: the pane sits inside Claude's
+    app. Taken: the diff palette (a row is the muted success or error fill,
+    the same in the gutter and under the code; a changed row's numbers and
+    marker are that hue's ink, `#90ca90` / `#ffaea7` dark, `#00490b` /
+    `#76000c` light; Astryx's syntax tokens replace GitHub's); no accent hue
+    (the orange share bars are the text's own ink on the `subtle` track, the
+    selected card's frame is `inactive`, not the blue `suggestion`); the
+    totals are Astryx's badge, the hue's ink on its own muted fill; type by
+    weight and face instead of `bold` alone (`mono` + `tabular` on numbers and
+    code, changed rows `medium`, context `regular`, titles `semibold`, a
+    hunk's range and function a `footnote` in the code face). The terminal
+    keeps the theme's diff keys, plain text and bold. Light rows are 40% of
+    the muted fill, not Astryx's 25%: on the host's off-white card a quarter
+    read as no tint. Measured (WCAG, every token and ink on every row over
+    card fills `#252523`, `#151b23`, `#262626`, `#f0eee6` and white): 120
+    pairs, lowest 4.55:1 (the comment grey on an added row over `#262626`),
+    none under 4.5. Not taken: radius, shadow, 1px alpha borders, a hard code
+    background, Astryx's own greys for the pane (no prop draws the first
+    three; the rest would fight the host theme), and the secondary grey
+    `#9e9e9e` on a tinted row (3.3 to 4.4:1; it numbers unchanged rows only).
+  - **Code.** Each on/off control is one Button (`pill(isOn)`: the outlined
+    pill while on, a plain dim word while off) instead of two copies of it;
+    glyph-only controls (`‹ › ↑ ↓ − +`, the fold chevrons) carry a `label`
+    that names them, the glyph still what is drawn; a hunk the pane has no
+    room for no longer reads `No text changes.` beside `Diff too large`; a
+    comment draft pauses the letter keys only while its field is drawn (a
+    folded card gave no editor and no keys).
+  - **Seats** (one prompt, independent answers): a Codex review (design
+    class, high effort) and four other model families. All five: one scroll
+    Box per hunk, numbers pinned, `clip`, no trailing-space padding (it lands
+    in copied text and multiplies the drawing's size), keep host theme keys.
+    Adopted from them: the marker pinned with the numbers (four seats), a
+    Box `minWidth` instead of padding as the tint hedge, hue inks for numbers
+    on tinted rows (grey fails), desktop only until the phone is seen, the
+    two bug fixes above, labels, the pill. Split: one seat would delete the
+    pan outright; four keep it where a Box cannot scroll (kept). Not done,
+    worth a later pass: `pans` and hunk folds keyed by hunk index (fixed in
+    v26); `panMax` assumes
+    a 20-column window; a long minified line is one Text a token.
+  - **Checks.** 159 tests; six new mutants in `tests/mutate.py`. Harness: a
+    `long lines (sideways scroll)` scenario, `overflowX` and the `size` /
+    `weight` / `mono` / `tabular` Text props in the painter, the mod's
+    light/dark palette following the page's theme (it was always dark), and
+    `?sx=<px>` to capture a scrolled state (`data-scrolled` on each block
+    reads window/content@offset: 719/1736@600 at 1,100 px). The painter draws
+    a child Box only as wide as the window unless its own content or
+    `minWidth` is wider, the conservative reading of the engine's contract.
+    **Not seen on the real desktop** (a session cannot look at its own
+    window): look once at a scrolled hunk's far right edge (tint to the end,
+    numbers level with their lines).
+- **Folds and pan follow the hunk** (v26, 0.5.1, 2026-11-25): a hunk's fold
+  (`shut`) and its pan offset were keyed by the hunk's place in the list, so a
+  refresh that added a hunk above handed them to its neighbour. They are keyed
+  by `hunkId`: the old-file line of the hunk's first change (`o20`), which
+  neither a new hunk above nor the context setting moves while the base
+  stands; a context-only hunk is `h<start>`. Folds saved under the old index
+  keys read as open once.
+- **Pan to the line's end; bounded colours** (v27, 0.5.2, 2026-11-25; v25's
+  last two leftovers):
+  - **Pan** (terminal, VS Code, phone, syntax view). The limit was "the last
+    whole 20-column step before the widest line's end", whatever the pane's
+    width: a wide pane offered a pan for a line it showed whole, and a narrow
+    one could stop short of a line's end. `panLimit` now measures the columns
+    a cut line really has (`cardCols`: the pane, less the file list beside it
+    and the card's frame; then less the gutters, marker, inset and the
+    ellipsis cell) and `panMax(text, room)` stops where the widest line's last
+    column comes into view, the last press a part step. A hunk that fits
+    draws no `‹ scroll ›`, and the toolbar's `‹ scroll` / `scroll ›` (keys
+    `a`/`d`) show only while a change of the selected file is cut. Widths are
+    still code points, not cells: a line of wide glyphs can stop a little early.
+  - **Colours.** A coloured token is a node, and the selected file is drawn
+    whatever it weighs, so a minified line or a long file could pass the
+    1,600 nodes a remote surface holds and blank the pane. A drawing now
+    colours at most 900 spans (12,000 on the terminal), the selected file
+    first, and never a line over 2,000 characters; past either a line is drawn
+    whole in the text colour and its card says `Some lines here are drawn
+    without syntax colours: more than this pane colours at once.`
+  - 164 tests; three more mutants.
 - **Stress repo** (`harness/make_stress_repo.py <dir>`): a bare origin plus a
   clone with develop moving after branches fork, qa, and 19 branches (small
   fix, 30-commit refactor, renames, binary/mode/symlink, a 4,000-line diff,
@@ -466,8 +566,8 @@ is placed from 144 columns and otherwise waits until opened.
     claude plugin validate ~/.claude/mods/repo-diffs
     claude plugin test ~/.claude/mods/repo-diffs
 
-The tests mock git and the ledger read (155 across 10 files as of 0.4.0,
-counted 2026-10-19; 137 after v21; 87, each v3–v6 change with a mutation control
+The tests mock git and the ledger read (164 across 10 files as of 0.5.2,
+counted 2026-11-25; 155 as of 0.4.0; 137 after v21; 87, each v3–v6 change with a mutation control
 that fails when the fix is removed; earlier 14: tree and hunk logic, selection
 and stepping, the stale-load race, stale listings on git failure, `-z` paths,
 CRLF, oversized hunks, the Bash debounce, and the once-per-session auto-open).

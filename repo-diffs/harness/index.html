@@ -24,6 +24,8 @@
   .input input { flex: 1; min-width: 6em; font: inherit; background: transparent; color: inherit; border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
   pre.code { margin: 0; font: var(--fs) / 1.5 var(--mono); }
   pre.code.cut div { white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+  /* inside a sideways-scrolling Box a line keeps its full width (desktop) */
+  [data-scrollx] [data-el='Text'] { white-space: pre !important; overflow: visible !important; text-overflow: clip !important; flex-shrink: 0; }
   pre.code.wrap div { white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>
 </head>

@@ -110,11 +110,11 @@ test('the header, the list and each card are framed at full strength; the select
     for (const c of n.children ?? []) walk(c)
   }
   walk(root)
-  // v21 (defined blocks): the header, the file list and the one, selected, card (accent); none dim
+  // v21 (defined blocks): the header, the file list and the one, selected, card (the stronger neutral, v25); none dim
   expect(frames).toEqual([
     { color: 'subtle', dim: undefined },
     { color: 'subtle', dim: undefined },
-    { color: 'suggestion', dim: undefined },
+    { color: 'inactive', dim: undefined },
   ])
   await ui.unmount()
 })

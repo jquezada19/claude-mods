@@ -234,6 +234,24 @@ const unpad = (src: string) => src.replace(/^ ([+\- ]) /gm, '$1')
 // marker line (the host keeps no keys on nested elements)
 const diffTextOf = (n: { type?: string; props?: Record<string, unknown>; children?: unknown[] }): string | undefined => {
   if (n.type === 'Code') return String(n.props?.source ?? '')
+  // a sideways-scrolling hunk (desktop): the +/- sit in the pinned
+  // column beside the numbers and the code scrolls in the Box next to it, one
+  // Box a run in each; read back as the padded marker lines the other views draw
+  type N = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+  const kids = (n.children ?? []) as N[]
+  if (n.type === 'Box' && kids.length === 2 && kids[1]?.props?.overflowX === 'scroll') {
+    const flat = (x: N): string => (x.children ?? []).map(c => (typeof c === 'string' ? c : c && typeof c === 'object' ? flat(c as N) : '')).join('')
+    const pinned = (kids[0]!.children ?? []) as N[]
+    const runs = (kids[1]!.children ?? []) as N[]
+    return runs
+      .flatMap((run, j) => {
+        const marks = flat(((pinned[j]?.children ?? []) as N[])[2] ?? {}).split('\n')
+        return flat(run)
+          .split('\n')
+          .map((l, k) => (l.startsWith(' \\') ? l.slice(1) : ` ${marks[k] ?? ' '} ${l.slice(1)}`))
+      })
+      .join('\n')
+  }
   if (n.type !== 'Text' || n.props?.wrap === undefined) return undefined
   // its own strings and those of the token spans inside it
   const all = (x: { children?: unknown[] }): string =>
@@ -331,6 +349,48 @@ test('paths with tabs survive (-z), CRLF is cleaned, a failed diff says why', as
   const src = (await codeText(ui)) as string
   expect(src).toContain('+y')
   expect(src.includes('\r')).toBe(false)
+})
+
+test('v25: a hunk the pane has no room for is said to be too large, never "No text changes."', async ($, on) => {
+  // one line past the whole diff budget: nothing of the hunk can be drawn
+  wired(on, a => (a.includes('base000 -- src/a.ts') ? ok(`--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1,1 @@\n+${'x'.repeat(70_000)}\n`) : null))
+  await $.tool.call(EDIT)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect(await ui.find({ text: /Diff too large for the pane: 1 hunk not shown\./ })).toBeDefined()
+  expect(await ui.find({ text: /^No text changes\.$/ })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('v25: a comment draft pauses the letter keys only while its field is drawn; a folded card gives them back', async ($, on) => {
+  wired(on, () => null)
+  await $.tool.call(EDIT)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  expect((await ui.find({ key: 'next' }))?.props.hotkey).toBe('j')
+  await ui.press({ key: 'cmt:0' })
+  expect((await ui.find({ key: 'next' }))?.props.hotkey).toBeUndefined()
+  // folded, the card draws no field: the draft is kept, the keys work
+  await ui.press({ key: 'fold' })
+  expect((await ui.find({ key: 'next' }))?.props.hotkey).toBe('j')
+  await ui.press({ key: 'fold' })
+  expect((await ui.find({ key: 'next' }))?.props.hotkey).toBeUndefined()
+  await ui.unmount()
+})
+
+test('v25: glyph-only controls carry a name; an on/off control is one Button in both states', async ($, on) => {
+  wired(on, () => null)
+  await $.tool.call(EDIT)
+  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  for (const [key, name] of [['prev', 'previous file'], ['next', 'next file'], ['hdr-fold', 'show details'], ['hunkfold:0', 'collapse change']] as const) {
+    expect((await ui.find({ key }))?.props.label).toBe(name)
+  }
+  // off: a plain dim word; on: the surface's outlined pill; same key, same hotkey
+  await ui.press({ key: 'options' })
+  const off = (await ui.find({ key: 'wrap' }))?.props
+  expect([off?.plain, off?.variant, off?.hotkey]).toEqual([true, undefined, 'w'])
+  await ui.press({ key: 'wrap' })
+  const on2 = (await ui.find({ key: 'wrap' }))?.props
+  expect([on2?.plain, on2?.variant, on2?.hotkey]).toEqual([undefined, 'secondary', 'w'])
+  await ui.unmount()
 })
 
 test('an oversized first hunk is clipped to a valid hunk, not drawn whole', async ($, on) => {
@@ -982,7 +1042,11 @@ test('D6: the wrap toggle switches the diff between wrapping and cutting long li
   await $.tool.call(EDIT)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'options' })
-  expect((await firstDiff(ui))?.props?.wrap).toBe('truncate-end')
+  // cut, the desktop scrolls a hunk sideways: the code in an overflowX Box, never an ellipsis
+  type B = { type?: string; props?: Record<string, unknown>; children?: B[] }
+  const cut = (await firstDiff(ui)) as B
+  expect(cut.children?.[1]?.props?.overflowX).toBe('scroll')
+  expect(cut.children?.[1]?.children?.[0]?.children?.[0]?.props?.wrap).toBe('clip')
   await ui.press({ key: 'wrap' })
   expect((await firstDiff(ui))?.props?.wrap).toBe('wrap')
   // and the syntax view (g) follows it
@@ -993,36 +1057,88 @@ test('D6: the wrap toggle switches the diff between wrapping and cutting long li
   await ui.unmount()
 })
 
-test('pan: a cut hunk with a long line scrolls sideways on its own ‹ ›, and wrap hides them', async ($, on) => {
-  const long = 'x'.repeat(30) + 'TAIL' + 'y'.repeat(30)
+test('pan: a cut hunk with a long line scrolls sideways on its own ‹ ›, to the line\'s end and no further, and wrap hides them', async ($, on) => {
+  // a 100-column terminal pane gives a cut line 60 columns: 160 columns pan to column 101
+  const long = 'x'.repeat(100) + 'TAIL' + 'y'.repeat(56)
   wired(on, a => (a.includes('base000 -- src/a.ts') ? ok(`--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1,1 @@\n+${long}\n`) : null))
   await $.tool.call(EDIT)
-  const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'options' })
   const text = async () => unpad(diffTextOf((await firstDiff(ui)) as never) ?? '')
   expect(await text()).toContain(`+${long}`)
   await ui.press({ key: 'panr:0' })
   expect(await text()).toContain(`+${long.slice(20)}`)
   expect(await ui.find({ text: /^col 21$/ })).toBeDefined()
-  await ui.press({ key: 'panr:0' })
-  await ui.press({ key: 'panr:0' })
-  await ui.press({ key: 'panr:0' })
-  // held at the last stop: 64 columns leave the final 4 in view at column 61
-  expect(await ui.find({ text: /^col 61$/ })).toBeDefined()
-  expect(await text()).toContain('+yyyy')
+  for (let k = 0; k < 6; k++) await ui.press({ key: 'panr:0' })
+  // held where the line's last column comes into view, however many presses
+  expect(await ui.find({ text: /^col 101$/ })).toBeDefined()
+  expect(await text()).toContain(`+${long.slice(100)}`)
   await ui.press({ key: 'panl:0' })
-  expect(await ui.find({ text: /^col 41$/ })).toBeDefined()
+  expect(await ui.find({ text: /^col 81$/ })).toBeDefined()
   await ui.press({ key: 'wrap' })
   expect(await ui.find({ key: 'panr:0' })).toBeUndefined()
   expect(await text()).toContain(`+${long}`)
   await ui.unmount()
 })
 
-test('pan keys: a/d scroll the change n/p last landed on, show in the legend, and leave with wrap', async ($, on) => {
-  const long = 'x'.repeat(30) + 'TAIL' + 'y'.repeat(30)
-  wired(on, a => (a.includes('base000 -- src/a.ts') ? ok(`--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1,1 @@\n+${long}\n`) : null))
+test('pan: a line the pane shows whole offers no pan; a narrower pane, where it is cut, does', async ($, on) => {
+  const line = 'x'.repeat(46) + 'TAIL'
+  wired(on, a => (a.includes('base000 -- src/a.ts') ? ok(`--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1,1 @@\n+${line}\n`) : null))
+  await $.tool.call(EDIT)
+  // 100 columns: 60 for the code, the 50-column line fits (the old limit, a fixed 20 columns, offered a pan here)
+  const wide = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await wide.press({ key: 'options' })
+  expect(await wide.find({ key: 'panr:0' })).toBeUndefined()
+  expect(await wide.find({ key: 'pan-right' })).toBeUndefined()
+  await wide.unmount()
+  // 50 columns, stacked: 38 for the code, so the last 12 are one (part) press away
+  const narrow = await $.ui.mount({ ...PANE, props: { ...PANE.props, bodyColumns: 50 }, surface: 'terminal' })
+  // the second mount's diff arrives a redraw later
+  expect(await eventually(() => narrow.redraw(), async () => ((await narrow.find({ key: 'panr:0' })) ? true : undefined))).toBe(true)
+  await narrow.press({ key: 'panr:0' })
+  expect(await narrow.find({ text: /^col 13$/ })).toBeDefined()
+  expect(unpad(diffTextOf((await firstDiff(narrow)) as never) ?? '')).toContain('TAIL')
+  await narrow.unmount()
+})
+
+test('syntax colours are bounded: a line too long to be code, and lines past the drawing\'s span room, draw in the text colour and the card says so', async ($, on) => {
+  type N = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
+  // a coloured span: a Text in one of the dark palette's token colours
+  const TOKEN = new Set(['#efa8ff', '#a1caff', '#90d7c8', '#ffb37e', '#a4d6a3', '#b9b9b9'])
+  const spansIn = (n: N | undefined): number =>
+    !n ? 0 : (n.children ?? []).reduce<number>((s, c) => s + (c && typeof c === 'object' ? (TOKEN.has(String((c as N).props?.color)) ? 1 : 0) + spansIn(c as N) : 0), 0)
+  // a minified line: thousands of tokens, one node each if coloured
+  let patch = `--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1,2 @@\n+const a = 1\n+${'const x = f(1);'.repeat(200)}\n`
+  wired(on, a => (a.includes('base000 -- src/a.ts') ? ok(patch) : null))
   await $.tool.call(EDIT)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
+  const note = /drawn without syntax colours/
+  expect(await ui.find({ text: note })).toBeDefined()
+  // the short line keeps its colours (const, 1); the long one adds none
+  const few = spansIn((await containerOf(ui, FOLD())) as N)
+  expect(few).toBeGreaterThan(0)
+  expect(few).toBeLessThan(10)
+  expect(await codeText(ui)).toContain('+const a = 1')
+  // 400 ordinary lines: coloured until the room is spent, plain after; never past the room
+  patch = `--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1,400 @@\n${Array.from({ length: 400 }, (_, k) => `+const v${k} = call${k}(${k}, 'text')`).join('\n')}\n`
+  await ui.press({ key: 'refresh' })
+  const many = spansIn((await containerOf(ui, FOLD())) as N)
+  expect(many).toBeGreaterThan(500)
+  expect(many).toBeLessThanOrEqual(900)
+  expect(await ui.find({ text: note })).toBeDefined()
+  expect(await codeText(ui)).toContain("+const v399 = call399(399, 'text')")
+  // a small diff says nothing
+  patch = `--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1,1 @@\n+const a = 1\n`
+  await ui.press({ key: 'refresh' })
+  expect(await ui.find({ text: note })).toBeUndefined()
+  await ui.unmount()
+})
+
+test('pan keys: a/d scroll the change n/p last landed on, show in the legend, and leave with wrap', async ($, on) => {
+  const long = 'x'.repeat(100) + 'TAIL' + 'y'.repeat(56)
+  wired(on, a => (a.includes('base000 -- src/a.ts') ? ok(`--- a/src/a.ts\n+++ b/src/a.ts\n@@ -0,0 +1,1 @@\n+${long}\n`) : null))
+  await $.tool.call(EDIT)
+  const ui = await $.ui.mount({ ...PANE, surface: 'terminal' })
   await ui.press({ key: 'options' })
   expect((await ui.find({ key: 'pan-right' }))?.props.hotkey).toBe('d')
   expect((await ui.find({ key: 'pan-left' }))?.props.hotkey).toBe('a')
@@ -1996,7 +2112,7 @@ test('panels: header, file list and each file container are framed; a narrow pan
   }
   // header, file list, then one container per file: the selected one in the accent
   // v21: header, list and each card are framed (defined blocks)
-  expect(await framed(100)).toEqual({ frames: ['round/subtle', 'round/subtle', 'round/suggestion', 'round/subtle'], hasTitle: true })
+  expect(await framed(100)).toEqual({ frames: ['round/subtle', 'round/subtle', 'round/inactive', 'round/subtle'], hasTitle: true })
   expect((await framed(30)).frames).toEqual([])
 })
 
@@ -2245,33 +2361,44 @@ test('C3: a hide editor opened on desktop holds no keys on the phone', async ($,
   await phone.unmount()
 })
 
-test('views: hunks draw as GitHub-style tinted rows; g gives syntax-coloured numbered runs', async ($, on) => {
+test('views: hunks draw as tinted rows, scrolling sideways on the desktop; g gives syntax-coloured numbered runs', async ($, on) => {
   wired(on, a => (a.includes('base000 -- src/a.ts') ? ok('--- a/src/a.ts\n+++ b/src/a.ts\n@@ -7,3 +7,3 @@ fn\n keep\n-old\n+new\n keep2\n') : null))
   await $.tool.call(EDIT)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   await ui.press({ key: 'options' })
-  // tinted (default): one row a run, tinted by what it is, numbered in its gutter
+  // tinted (default): one row a run, tinted by what it is, numbered in its gutter.
+  // The desktop scrolls a cut hunk sideways: numbers and marker pinned in one
+  // column, the code in the overflowX Box beside it, a Box a run in each
   type N = { type?: string; props?: Record<string, unknown>; children?: unknown[] }
-  const rows: Array<[unknown, string, string]> = []
+  const flat = (x: N): string => (x.children ?? []).map(c => (typeof c === 'string' ? c : c && typeof c === 'object' ? flat(c as N) : '')).join('')
+  let hunk: N | undefined
   const walk = (n: N) => {
     const kids = (n.children ?? []).filter((c): c is N => Boolean(c) && typeof c === 'object')
-    // v20: two gutters (old, new), a marker column, then the code
-    if (n.type === 'Box' && kids.length === 4 && kids[3]!.children?.some(c => diffTextOf(c as N) !== undefined)) {
-      const numOf = (k: N) => ((k.children?.[0] as N)?.children ?? []).join('').trim()
-      const code = diffTextOf(kids[3]!.children!.find(c => diffTextOf(c as N) !== undefined) as N)!
-      rows.push([n.props?.backgroundColor, `${numOf(kids[0]!)}|${numOf(kids[1]!)}`, code])
-      return
-    }
-    kids.forEach(walk)
+    if (n.type === 'Box' && kids.length === 2 && kids[1]!.props?.overflowX === 'scroll') hunk = n
+    else kids.forEach(walk)
   }
   walk((await containerOf(ui, FOLD())) as N)
+  const [pinned, code] = (hunk!.children ?? []) as N[]
+  const rows = ((pinned!.children ?? []) as N[]).map((g, j) => {
+    const [olds, news, mark] = (g.children ?? []) as N[]
+    const run = ((code!.children ?? []) as N[])[j]!
+    // both columns carry the one tint, so the row reads whole wherever the code is scrolled
+    return [g.props?.backgroundColor, run.props?.backgroundColor, `${flat(olds!).trim()}|${flat(news!).trim()}|${flat(mark!)}`, flat(run)]
+  })
   expect(rows).toEqual([
-    [undefined, '7|7', '   keep'],
-    // GitHub's own tints on the desktop (dark: --diffBlob-*-bgColor); a removed line counts in the old file only, an added one in the new
-    ['#f851491a', '8|', ' - old'],
-    ['#2ea04326', '|8', ' + new'],
-    [undefined, '9|9', '   keep2'],
+    [undefined, undefined, '7|7| ', ' keep'],
+    // Astryx's muted fills on the desktop (dark); a removed line counts in the old file only, an added one in the new
+    ['#ff98903d', '#ff98903d', '8||-', ' old'],
+    ['#90ca903d', '#90ca903d', '|8|+', ' new'],
+    [undefined, undefined, '9|9| ', ' keep2'],
   ])
+  // each run's Box is at least the widest line across (5 cells of code, a cell of air either side), so a short row's tint spans the scroll
+  expect(((code!.children ?? []) as N[]).map(r => r.props?.minWidth)).toEqual([7, 7, 7, 7])
+  // the terminal cannot scroll a Box: one row a run, the marker in the code, cut at the edge
+  const term = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect(unpad(diffTextOf((await firstDiff(term)) as never) ?? '')).toBe(' keep')
+  expect((await firstDiff(term))?.props?.wrap).toBe('truncate-end')
+  await term.unmount()
   expect(await ui.find({ text: /^@@ -7,3 \+7,3 @@$/ })).toBeDefined()
   expect(await ui.find({ text: /^in fn$/ })).toBeDefined()
   // syntax (g): each run a Code numbered from its own file
@@ -2301,7 +2428,7 @@ test('containers: every changed file has its own; the selected one is ringed in 
   await $.tool.call(EDIT)
   const ui = await $.ui.mount({ ...PANE, surface: 'desktop' })
   const NEW = KEY('new.md')
-  expect(await frameOf(ui, FOLD())).toBe('round/suggestion')
+  expect(await frameOf(ui, FOLD())).toBe('round/inactive')
   expect(await frameOf(ui, FOLD('new.md'))).toBe('round/subtle')
   // the selected container's buttons are the plain keys; the other's carry its file
   expect(await buttonsIn(ui, FOLD())).toEqual(expect.arrayContaining(['viewed', 'copy-file', 'copy:0', 'fullctx']))
@@ -2315,7 +2442,7 @@ test('containers: every changed file has its own; the selected one is ringed in 
   // picking the other file by its name moves the accent and the plain keys
   await ui.press({ key: `pick@${NEW}` })
   expect(await ui.find({ text: /^2\/2$/ })).toBeDefined()
-  expect(await frameOf(ui, FOLD())).toBe('round/suggestion')
+  expect(await frameOf(ui, FOLD())).toBe('round/inactive')
   expect(await buttonsIn(ui, FOLD())).toContain('viewed')
   expect(await frameOf(ui, FOLD('src/a.ts'))).toBe('round/subtle')
   await ui.unmount()
@@ -2350,7 +2477,7 @@ test('containers: one file folds and opens on its chevron, and stays folded acro
   await ui.press({ key: fold })
   expect(await codesIn(ui, fold)).toEqual([])
   expect(await ui.find({ text: /^✓ Viewed$/ })).toBeUndefined()
-  expect(JSON.stringify(await ui.find({ key: fold }))).toContain('"label":"▸"')
+  expect(JSON.stringify(await ui.find({ key: fold }))).toContain('"text":"▸"')
   // the selected file is untouched
   expect((await codesIn(ui, FOLD())).length).toBeGreaterThan(0)
   // a refresh keeps the fold
@@ -2358,7 +2485,7 @@ test('containers: one file folds and opens on its chevron, and stays folded acro
   expect(await codesIn(ui, fold)).toEqual([])
   await ui.press({ key: fold })
   expect((await codesIn(ui, fold)).map(c => unpad(String(c.source)))).toEqual(['+fresh line'])
-  expect(JSON.stringify(await ui.find({ key: fold }))).toContain('"label":"▾"')
+  expect(JSON.stringify(await ui.find({ key: fold }))).toContain('"text":"▾"')
   await ui.unmount()
 })
 
@@ -2448,7 +2575,7 @@ test('containers: 25 files draw at first, more come on request, and a file picke
   expect(await drawn('f051.ts')).toBe(false)
   // a file picked past the window starts it: it and the files after it, the earlier ones said
   await ui.press({ key: `btn:${KEY('f058.ts')}` })
-  expect(await frameOf(ui, FOLD())).toBe('round/suggestion')
+  expect(await frameOf(ui, FOLD())).toBe('round/inactive')
   expect(await ui.find({ text: /^58\/101$/ })).toBeDefined()
   expect(await ui.find({ text: /^57 earlier files above$/ })).toBeDefined()
   expect(await drawn('f057.ts')).toBe(false)

@@ -37,6 +37,8 @@ const $: any = new Proxy(
       { get: (t: any, k) => (k in t ? t[k] : anyProxy(`ui.${String(k)}`)) },
     ),
     clock: { now: () => Promise.resolve(NOW) },
+    // the person's theme setting, as the mod reads it to pick its light or dark palette
+    config: { list: () => Promise.resolve([{ key: 'theme', value: theme === 'light' ? 'light' : 'dark' }]) },
     process: { run: (argv: string[]) => Promise.resolve(gitAnswer(argv)) },
   },
   { get: (t: any, k) => (k in t ? t[k] : anyProxy(String(k))) },
@@ -174,7 +176,30 @@ function screenshotFiles() {
   return out.slice(0, 318)
 }
 
+// lines past any pane's width, a short changed row between long context rows,
+// a tab, wide glyphs and a "\ No newline" note: what a sideways scroll must hold together
+const longPatch = [
+  '--- a/' + sel, '+++ b/' + sel,
+  '@@ -40,7 +40,8 @@ export async function saveProfile(dispatch, getState) {',
+  "   const payload = buildProfilePayload(getState().profile.draft, { includeAvatar: true, includeAddress: true, includePreferences: true, locale: getState().settings.locale })",
+  '-  if (!ok) return',
+  "+  if (!ok) return showAlert({ title: 'Could not save', message: describeFailure(result), actions: [{ label: 'Try again', onPress: () => dispatch(saveProfile()) }, { label: 'Cancel', style: 'cancel' }] })",
+  '+  track("profile_saved")',
+  "   const greeting = '日本語のテキスト and emoji 🎉 stay two cells wide'",
+  "\tconst tabbed = 'a tab leads this line'",
+  '   navigation.goBack()',
+  ' }',
+  '\\ No newline at end of file',
+  '@@ -90,3 +91,3 @@ function describeFailure(result) {',
+  '   switch (result.code) {',
+  "-    case 409: return 'Someone else changed this profile'",
+  "+    case 409: return 'Someone else changed this profile while you were editing it; reload to see their changes before saving again'",
+  '   }',
+  '',
+].join('\n')
+
 const SCENARIOS: Record<string, () => Record<string, unknown>> = {
+  'long lines (sideways scroll)': () => ({ snapshot: [appSnap()], view: baseView(sel), diff: readyDiff(sel, longPatch) }),
   'screenshot (PR #109)': () => ({
     snapshot: [appSnap()],
     view: baseView(sel),
@@ -344,6 +369,11 @@ function textStyle(el: HTMLElement, p: any, isRoot: boolean) {
   if (p.color) el.style.color = col(p.color)!
   if (p.backgroundColor) el.style.background = col(p.backgroundColor)!
   if (p.bold) el.style.fontWeight = '600'
+  if (p.weight) el.style.fontWeight = ({ regular: '400', medium: '500', semibold: '600', bold: '700' } as Record<string, string>)[p.weight] ?? ''
+  // the desktop's type steps against a 14px body
+  if (p.size) el.style.fontSize = ({ caption: '0.79em', footnote: '0.86em', body: '1em', heading: '1.14em', title: '1.36em' } as Record<string, string>)[p.size] ?? ''
+  if (p.mono) el.style.fontFamily = 'var(--mono)'
+  if (p.tabular) el.style.fontVariantNumeric = 'tabular-nums'
   if (p.dimColor) el.style.opacity = '0.7'
   if (p.italic) el.style.fontStyle = 'italic'
   if (!isRoot) return
@@ -394,6 +424,15 @@ function paint(node: any, parentIsText = false): Node {
     if (p.justifyContent) s.justifyContent = p.justifyContent
     if (p.overflow) s.overflow = p.overflow
     if (p.overflow === 'hidden') el.dataset.clip = '1'
+    // sideways scroll (desktop): the lines inside keep their full width.
+    // Drawn the conservative way: a child Box is only as wide as the window
+    // unless its own content is wider, so a tint that stops short shows here
+    if (p.overflowX === 'scroll') {
+      s.overflowX = 'auto'
+      el.dataset.scrollx = '1'
+      s.scrollbarWidth = 'thin'
+      s.scrollbarColor = `${col('subtle')} transparent`
+    }
     if (p.minWidth != null) s.minWidth = typeof p.minWidth === 'number' ? cx(p.minWidth) : p.minWidth
     if (p.width != null) s.width = typeof p.width === 'number' ? cx(p.width) : p.width
     // the pinned list's window: rows down, cells across, as the desktop lays them
@@ -567,6 +606,7 @@ function measureCell() {
   probe.remove()
   return w
 }
+const SCROLL_X = Number(new URLSearchParams(location.search).get('sx') ?? 0)
 async function render() {
   const cell = measureCell()
   document.documentElement.style.setProperty('--cell', `${cell}px`)
@@ -577,6 +617,14 @@ async function render() {
   const tree = await renderHook($, { surface: 'desktop', component: 'Pane', requestId: 'repo-diffs', props: { title: 'Repo diffs', isFocused: true, bodyColumns: cols, placement: 'dock', scroll: paneScroll(), view: {} } })
   const t1 = performance.now()
   body.replaceChildren(paint(tree))
+  // ?sx=<px>: every sideways-scrolling block scrolled that far as it is painted,
+  // so a headless capture shows the pinned numbers and the tint at the far edge;
+  // data-scrolled is what a dumped DOM can be read for: window/content@offset
+  if (SCROLL_X > 0)
+    body.querySelectorAll<HTMLElement>('[data-scrollx]').forEach(el => {
+      el.scrollLeft = SCROLL_X
+      el.dataset.scrolled = `${el.clientWidth}/${el.scrollWidth}@${Math.round(el.scrollLeft)}`
+    })
   // hover reveal: a Box drawn display none shows while its nearest keyed Box is hovered
   body.querySelectorAll<HTMLElement>('[data-hov]').forEach(el => {
     const scope = el.parentElement?.closest<HTMLElement>('[data-key]')

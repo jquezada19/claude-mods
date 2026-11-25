@@ -198,10 +198,57 @@ export function panLine(line: string, off: number): string {
   if (off <= 0 || line.startsWith('\\')) return line
   return line.slice(0, 1) + Array.from(line.slice(1)).slice(off).join('')
 }
-// how far a hunk can pan: the last whole step that still leaves part of its
-// widest line in view (64 columns stop at 60, showing the final 4)
-export function panMax(text: string): number {
+// how far a hunk can pan: until its widest line's last column is in view, in
+// a window `room` columns across (what a cut line really has to itself on
+// this pane). A hunk whose every line fits has nothing to pan. The last press
+// may be a part step: the limit is where the line ends, not a multiple.
+export function panMax(text: string, room: number = PAN_STEP): number {
   let widest = 0
   for (const l of text.split('\n').slice(1)) if (!l.startsWith('\\')) widest = Math.max(widest, Array.from(l).length - 1)
-  return Math.max(0, Math.ceil((widest - PAN_STEP) / PAN_STEP) * PAN_STEP)
+  return Math.max(0, widest - Math.max(1, room))
+}
+// how many digits a hunk's line numbers take, from its "@@" range
+export function gutterDigits(text: string): number {
+  const m = HEADER.exec(text.split('\n')[0] ?? '')
+  if (!m) return 1
+  return String(Math.max(1, Number(m[1]) + Number(m[2] ?? 1), Number(m[3]) + Number(m[4] ?? 1))).length
+}
+
+// How many cells a line of code takes when drawn whole: a tab runs to the next
+// multiple of eight, a wide glyph (CJK, fullwidth, emoji) takes two, a combining
+// mark or joiner none. An estimate for sizing a sideways-scrolling block's
+// tint, never for cutting text.
+const WIDE = /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1faff}\u{20000}-\u{3fffd}]/u
+const ZERO = /[̀-ͯ​-‍︀-️]/u
+export function cellsOf(line: string): number {
+  let n = 0
+  for (const ch of line) {
+    if (ch === '\t') n += 8 - (n % 8)
+    else if (ZERO.test(ch)) continue
+    else n += WIDE.test(ch) ? 2 : 1
+  }
+  return n
+}
+// the widest line of a hunk in cells, its marker left out; the "@@" line and a
+// "\ No newline" note are not code
+export function hunkCells(text: string): number {
+  let widest = 0
+  for (const l of text.replace(/\n$/, '').split('\n').slice(1)) if (!l.startsWith('\\')) widest = Math.max(widest, cellsOf(l.slice(1)))
+  return widest
+}
+
+// What a hunk is called across redraws: where its first change sits in the
+// old file. A hunk's place in the list moves when a refresh adds one above it,
+// and its "@@" range moves with the context setting; the old-file line of its
+// first change does neither while the base stands. A hunk with no change
+// (context only) is named by its range's start.
+export function hunkId(text: string): string {
+  const rows = text.split('\n')
+  const m = HEADER.exec(rows[0] ?? '')
+  let oldLine = m ? Number(m[1]) : 1
+  for (const row of rows.slice(1)) {
+    if (row[0] === '+' || row[0] === '-') return `o${oldLine}`
+    if (row[0] === ' ') oldLine++
+  }
+  return `h${m ? Number(m[1]) : 1}`
 }
