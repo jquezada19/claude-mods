@@ -13,14 +13,14 @@ code by `docs/render.sh`):
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="ticket-phase/docs/row-dark.svg"><img alt="ticket-phase: the eight phases as a bar, 5 Implement as the current pill, the hammer Clawd" src="ticket-phase/docs/row.svg"></picture>
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="usage-hp/docs/subscription-dark.svg"><img alt="usage-hp: 5H and 7D health bars with hearts" src="usage-hp/docs/subscription.svg"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="usage-hp/docs/subscription-dark.svg"><img alt="usage-hp: 5H, 7D and FB health bars with hearts" src="usage-hp/docs/subscription.svg"></picture>
 
 In the terminal the same rows are text:
 
     ● 3 running · 270k · 2:14 ×3
     ● CACHE WARM · 59m left of 1h · last hit 100%
     ♥ 5H  ████████████░░░░░░░░  62% left · resets in 2h 14m · lasts past reset
-    ♡ 7D  ███████░░░░░░░░░░░░░  34% left · resets in 4d · empty in ~2d 9h at this pace
+    ♡ 7D  ███████░░░░░░░░░░░░░  34% left · resets in 4d · empty in ~1d 13h at this week's pace
           $0.30 this session
     #12345 full ◆◆◆◆◈◇◇◇ 5 Implement 23m/41m · ~2h10m left · 184k · R6×2
 
@@ -88,6 +88,8 @@ and sends nothing. A dismissed dialog sends as typed.
 A health bar for each usage limit your session reports.
 
 - **Pro or Max**: `5H` and `7D` bars appear by themselves after the first reply.
+  A plan with no five-hour window shows `7D` alone, and `FB` beneath it for
+  the weekly Fable limit where the account has one.
 - **Enterprise spend limit or API billing**: Claude Code gives mods no limit to
   read, so you enter yours once (see step 5) and a `SPEND` bar tracks it.
 
@@ -99,7 +101,9 @@ Reading a row:
 - **`empty in ~1h 10m at this pace`** or **`lasts past reset`**: appears after
   about five minutes of readings once the bar has dropped, from how fast it
   moved in the last hour (SPEND paces from the last week's billed spend when it
-  has one, and says it on the line beneath).
+  has one, and says it on the line beneath). The weekly bars (`7D`, `FB`)
+  compare what is used with how much of the week has gone instead, and read
+  `empty in ~2d at this week's pace`.
 - **`$0.30 this session`** (bold, on the line beneath the bars): this session's
   cost so far; SPEND adds what it likely bills, `(~$0.29 billed)`.
 - **`as of 14m ago`** (5H and 7D, line beneath): the figures come from your

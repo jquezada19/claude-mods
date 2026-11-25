@@ -1637,3 +1637,324 @@ test('collapsed on a metered seat with no limit entered, the row still passes: n
   await $.turn.complete(TURN)
   expect(await drawn($, 'terminal', { isCollapsed: true })).toBe('')
 })
+
+// The Fable weekly window: the engine's rateLimits leave it out, so the mod reads
+// it off the unified rate-limit headers of model responses. A test's `$` raises
+// no http.fetch of its own, so a plugin beside the mod sends one request to the
+// API at each turn's end, as any mod may, and the test answers it beneath.
+const WEEK_RESET = T0 + 5 * 24 * 60 * MINUTE + 19 * 60 * MINUTE
+const fableHeaders = (share: string, resetMs = WEEK_RESET): Record<string, string> => ({
+  'anthropic-ratelimit-unified-7d_oi-utilization': share,
+  'anthropic-ratelimit-unified-7d_oi-reset': String(resetMs / 1000),
+})
+
+const CALLER = {
+  plugins: [
+    {
+      name: 'caller',
+      register(on: On) {
+        on('turn.complete', async ($, e, next) => {
+          try {
+            const answer = await $.http.fetch('https://api.anthropic.com/v1/messages/count_tokens')
+            await $.store.set('caller:answer', { status: answer.status, headers: answer.headers })
+          } catch {
+            await $.store.set('caller:answer', 'refused')
+          }
+
+          return next(e)
+        })
+      },
+    },
+  ],
+}
+
+/** What the API answers the caller with: `headers` as they stand when it asks. */
+const answered = (on: On, headers: () => Record<string, string>) =>
+  on('http.fetch', () => ({ value: { status: 200, ok: true, headers: headers(), text: '' } }) as never)
+
+for (const surface of SURFACES) {
+  test(`${surface}: a plan with no 5H window draws 7D, then FB from the response headers`, CALLER, async ($, on) => {
+    const it = world(on)
+    let headers = fableHeaders('0.12')
+    answered(on, () => headers)
+    it.limits = [{ kind: 'seven_day', percentUsed: 8, resetsAt: new Date(WEEK_RESET).toISOString() }]
+
+    await $.turn.complete(TURN)
+
+    const text = await drawn($, surface)
+    expect(text).not.toContain('5H')
+    expect(text).toContain('7D')
+    expect(text).toContain('92% left')
+    expect(text).toContain('FB')
+    expect(text).toContain('88% left')
+    // The rows come in order: the engine's windows, then Fable.
+    expect(text.indexOf('7D')).toBeLessThan(text.indexOf('FB'))
+    expect(text).toContain('resets in 6d')
+
+    // The next response moves it; the turn's end draws the new figure.
+    headers = fableHeaders('0.555')
+    await $.turn.complete(TURN)
+    expect(await drawn($, surface)).toContain('45% left')
+  })
+}
+
+test('FB: the row is heart, label, bar, in that order', CALLER, async ($, on) => {
+  const it = world(on)
+  answered(on, () => fableHeaders('0.5'))
+  it.limits = [{ kind: 'seven_day', percentUsed: 8, resetsAt: new Date(WEEK_RESET).toISOString() }]
+  await $.turn.complete(TURN)
+
+  const text = await drawn($, 'terminal')
+  // 50% left: the hollow heart, the label, then ten lit cells of twenty.
+  expect(text).toContain('♡ FB  ██████████░░░░░░░░░░  50% left')
+})
+
+test('FB: no header, no row; a response without a figure keeps the last one', CALLER, async ($, on) => {
+  const it = world(on)
+  let headers: Record<string, string> = {}
+  answered(on, () => headers)
+  it.limits = [{ kind: 'seven_day', percentUsed: 8 }]
+
+  await $.turn.complete(TURN)
+  expect(await drawn($)).not.toContain('FB')
+
+  headers = fableHeaders('0.3')
+  await $.turn.complete(TURN)
+  expect(await drawn($)).toContain('70% left')
+
+  headers = { 'anthropic-ratelimit-unified-7d_oi-utilization': 'soon' }
+  await $.turn.complete(TURN)
+  expect(await drawn($)).toContain('70% left')
+})
+
+test('FB: past its limit the figure is capped at 100 used, and the answer goes on untouched', CALLER, async ($, on) => {
+  const it = world(on)
+  answered(on, () => fableHeaders('1.2345'))
+  it.limits = [{ kind: 'seven_day', percentUsed: 8 }]
+
+  await $.turn.complete(TURN)
+  const answer = it.store.get('caller:answer') as { status: number; headers: Record<string, string> }
+  expect(answer.status).toBe(200)
+  expect(answer.headers['anthropic-ratelimit-unified-7d_oi-utilization']).toBe('1.2345')
+
+  const text = await drawn($, 'terminal')
+  expect(text).toContain('FB')
+  expect(text).toContain('☠')
+  expect(text).toContain('0% left')
+})
+
+test('FB: a refused request stays refused and the bars stay as they were', CALLER, async ($, on) => {
+  const it = world(on)
+  on('http.fetch', () => ({ deny: 'no network' }) as never)
+  it.limits = [{ kind: 'seven_day', percentUsed: 8 }]
+
+  await $.turn.complete(TURN)
+  expect(it.store.get('caller:answer')).toBe('refused')
+  const text = await drawn($)
+  expect(text).toContain('7D')
+  expect(text).not.toContain('FB')
+})
+
+const ELSEWHERE = {
+  plugins: [
+    {
+      name: 'elsewhere',
+      register(on: On) {
+        on('turn.complete', async ($, e, next) => {
+          await $.http.fetch('https://example.com/api.anthropic.com/v1/messages')
+          await $.store.set('elsewhere:asked', true)
+
+          return next(e)
+        })
+      },
+    },
+  ],
+}
+
+test('FB: a plugin\'s request to another host is not read, whatever headers it answers with', ELSEWHERE, async ($, on) => {
+  const it = world(on)
+  answered(on, () => fableHeaders('0.4'))
+  it.limits = [{ kind: 'seven_day', percentUsed: 8 }]
+
+  await $.turn.complete(TURN)
+  expect(it.store.get('elsewhere:asked')).toBe(true)
+  expect(await drawn($)).not.toContain('FB')
+})
+
+test('FB: a measure that reports the engine\'s limits just read reads nothing again, the Fable row held beside them', CALLER, async ($, on) => {
+  const it = world(on)
+  answered(on, () => fableHeaders('0.3'))
+  it.limits = [{ kind: 'seven_day', percentUsed: 20 }]
+  await $.turn.complete(TURN)
+  expect(await drawn($)).toContain('FB')
+  const before = it.usageCalls
+  await measure($, it, ['rateLimits'])
+  expect(it.usageCalls).toBe(before)
+})
+
+test('FB: a session with only the Fable window is a subscription seat, not a spend row', CALLER, async ($, on) => {
+  const it = world(on)
+  answered(on, () => fableHeaders('0.25'))
+  await $.command.run(hp('10 300'))
+  await $.turn.complete(TURN)
+
+  const text = await drawn($)
+  expect(text).toContain('FB')
+  expect(text).toContain('75% left')
+  expect(text).not.toContain('SPEND')
+})
+
+test('FB: a Fable header alone never clears a metered session\'s spend', CALLER, async ($, on) => {
+  const it = world(on)
+  let headers: Record<string, string> = {}
+  answered(on, () => headers)
+  it.usd = 5
+  await $.command.run(hp('10 300'))
+  await $.turn.complete(TURN)
+  expect(spendKeys(it.store)).toHaveLength(1)
+
+  // Some request to the API answers with a Fable figure: not the engine's word.
+  headers = fableHeaders('0.25')
+  it.usd = 6
+  await $.turn.complete(TURN)
+  await $.turn.complete(TURN)
+
+  expect(spendKeys(it.store)).toHaveLength(1)
+})
+
+test('FB: a turn that ends past the reset with no new figure drops the row', CALLER, async ($, on) => {
+  const it = world(on)
+  let headers: Record<string, string> = fableHeaders('0.4', T0 + 60 * MINUTE)
+  answered(on, () => headers)
+  it.limits = [{ kind: 'seven_day', percentUsed: 8, resetsAt: new Date(WEEK_RESET).toISOString() }]
+
+  await $.turn.complete(TURN)
+  expect(await drawn($)).toContain('FB')
+
+  // Idle past the reset: the row reads full until a reply says otherwise.
+  await it.clock.advance(2 * 60 * MINUTE)
+  expect(await drawn($)).toContain('FB')
+
+  headers = {}
+  await $.turn.complete(TURN)
+  await $.turn.complete(TURN)
+  const text = await drawn($)
+  expect(text).toContain('7D')
+  expect(text).not.toContain('FB')
+})
+
+test('FB: a reply naming no reset keeps the one known, and one no date holds is none', CALLER, async ($, on) => {
+  const it = world(on)
+  let headers: Record<string, string> = fableHeaders('0.4', T0 + 4 * 24 * 60 * MINUTE)
+  answered(on, () => headers)
+  it.limits = [{ kind: 'seven_day', percentUsed: 8, resetsAt: new Date(WEEK_RESET).toISOString() }]
+
+  await $.turn.complete(TURN)
+  headers = { 'anthropic-ratelimit-unified-7d_oi-utilization': '0.5' }
+  await $.turn.complete(TURN)
+  await $.turn.complete(TURN)
+
+  let text = await drawn($)
+  let row = text.slice(text.indexOf('FB'))
+  expect(row).toContain('50% left')
+  expect(row).toContain('resets in 4d')
+
+  headers = { ...headers, 'anthropic-ratelimit-unified-7d_oi-utilization': '0.6', 'anthropic-ratelimit-unified-7d_oi-reset': '9e15' }
+  await $.turn.complete(TURN)
+  await $.turn.complete(TURN)
+  text = await drawn($)
+  row = text.slice(text.indexOf('FB'))
+  expect(row).toContain('40% left')
+})
+
+test('FB: an engine that reports the Fable claim itself draws one FB row, its own', CALLER, async ($, on) => {
+  const it = world(on)
+  answered(on, () => fableHeaders('0.25'))
+  it.limits = [
+    { kind: 'seven_day', percentUsed: 8, resetsAt: new Date(WEEK_RESET).toISOString() },
+    { kind: 'seven_day_overage_included', percentUsed: 40, resetsAt: new Date(WEEK_RESET).toISOString() },
+  ]
+
+  await $.turn.complete(TURN)
+  await $.turn.complete(TURN)
+
+  const text = await drawn($)
+  expect(text.split('FB')).toHaveLength(2)
+  expect(text).toContain('60% left')
+  expect(text).not.toContain('75% left')
+  expect(text).not.toContain('seven_day_overage_included')
+})
+
+// Weekly bars pace against the week itself, not the last hour.
+const DAYS = 24 * 60 * MINUTE
+
+test('a weekly bar ahead of the week says when it empties, whatever the last hour did', async ($, on) => {
+  const it = world(on)
+  const resetsAt = new Date(T0 + 4 * DAYS).toISOString()
+  it.limits = [{ kind: 'seven_day', percentUsed: 59, resetsAt }]
+
+  await $.turn.complete(TURN)
+  await it.clock.advance(10 * MINUTE)
+  it.limits = [{ kind: 'seven_day', percentUsed: 60, resetsAt }]
+  await $.turn.complete(TURN)
+
+  // 60% gone in 3d 10m of the week: the 40 left go in two days, before the reset.
+  // The last ten minutes' point alone would read 6h 40m.
+  const text = await drawn($)
+  expect(text).toMatch(/empty in ~2d( 0h)? at this week's pace/)
+  expect(text).not.toContain('6h 40m')
+})
+
+test('a weekly bar behind the week outlasts its reset, even after a burst', async ($, on) => {
+  const it = world(on)
+  const resetsAt = new Date(T0 + 4 * DAYS).toISOString()
+  it.limits = [{ kind: 'seven_day', percentUsed: 10, resetsAt }]
+
+  await $.turn.complete(TURN)
+  await it.clock.advance(10 * MINUTE)
+  it.limits = [{ kind: 'seven_day', percentUsed: 20, resetsAt }]
+  await $.turn.complete(TURN)
+
+  // Ten points in ten minutes would empty it in 80 minutes; the week says otherwise.
+  const text = await drawn($)
+  expect(text).toContain('lasts past reset')
+  expect(text).not.toContain('empty in')
+})
+
+test('a weekly bar says nothing of pace in the week\'s first half day', async ($, on) => {
+  const it = world(on)
+  const resetsAt = new Date(T0 + 7 * DAYS - 6 * 60 * MINUTE).toISOString()
+  it.limits = [{ kind: 'seven_day', percentUsed: 30, resetsAt }]
+
+  await $.turn.complete(TURN)
+
+  const text = await drawn($)
+  expect(text).toContain('70% left')
+  expect(text).not.toContain('empty in')
+  expect(text).not.toContain('lasts past reset')
+})
+
+test('a weekly bar with no reset time keeps the hour\'s pace', async ($, on) => {
+  const it = world(on)
+  it.limits = [{ kind: 'seven_day', percentUsed: 20 }]
+
+  await $.turn.complete(TURN)
+  await it.clock.advance(10 * MINUTE)
+  it.limits = [{ kind: 'seven_day', percentUsed: 30 }]
+  await $.turn.complete(TURN)
+
+  expect(await drawn($)).toContain('empty in ~1h 10m at this pace')
+})
+
+test('the Fable bar paces against its own week', CALLER, async ($, on) => {
+  const it = world(on)
+  // The two weeks end apart: each row paces against its own.
+  answered(on, () => fableHeaders('0.6', T0 + 4 * DAYS))
+  it.limits = [{ kind: 'seven_day', percentUsed: 10, resetsAt: new Date(T0 + 6 * DAYS).toISOString() }]
+
+  await $.turn.complete(TURN)
+
+  const text = await drawn($)
+  expect(text.slice(0, text.indexOf('FB'))).toContain('lasts past reset')
+  expect(text.slice(text.indexOf('FB'))).toMatch(/empty in ~2d( 0h)? at this week's pace/)
+})

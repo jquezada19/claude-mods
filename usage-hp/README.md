@@ -3,14 +3,21 @@
 A Claude Code mod that draws a video-game health bar above the prompt for
 each usage limit your account has.
 
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/subscription-dark.svg"><img alt="Desktop rows on a subscription: 5H 62% left in green with three quarters of a heart, 7D 34% left in yellow with half a heart and empty in about 2d 9h at this pace, then $0.30 this session" src="docs/subscription.svg"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/subscription-dark.svg"><img alt="Desktop rows on a subscription: 5H 62% left in green with three quarters of a heart, 7D 34% left in yellow with half a heart and empty in about 1d 13h at this week's pace, FB 58% left in green lasting past its reset, then $0.30 this session" src="docs/subscription.svg"></picture>
 
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/spend-dark.svg"><img alt="Desktop row on a capped seat: SPEND 82–85% left as a range, $246–255 left of $300, and the footer line with this session, billed, reset and sync age" src="docs/spend.svg"></picture>
 
 In the terminal:
 
     ♥ 5H  ████████████░░░░░░░░  62% left · resets in 2h 14m · lasts past reset
-    ♡ 7D  ███████░░░░░░░░░░░░░  34% left · resets in 4d · empty in ~2d 9h at this pace
+    ♡ 7D  ███████░░░░░░░░░░░░░  34% left · resets in 4d · empty in ~1d 13h at this week's pace
+          $0.30 this session
+
+On a plan with no five-hour window (the higher Max tiers) the weekly limits
+are the rows, the Fable one read as `FB`:
+
+    ♥ 7D  ██████████████████░░  92% left · resets in 6d
+    ♥ FB  ██████████████████░░  88% left · resets in 6d
           $0.30 this session
 
 On an Enterprise seat with a monthly spend limit it draws a SPEND bar instead,
@@ -21,8 +28,20 @@ an estimate shown as a range:
 
 ## What the bars show
 
-- One bar per limit: `five_hour` and `seven_day` (Pro, Max), a gateway's
-  `spend_limit`, or the SPEND estimate on Enterprise
+- One bar per limit: `five_hour` and `seven_day` (Pro, Max), the weekly
+  Fable limit as `FB` where the account has one, a gateway's `spend_limit`,
+  or the SPEND estimate on Enterprise. A plan that has no five-hour window
+  draws no `5H` row
+- **`FB`, the weekly Fable limit** ("Weekly · Fable" in Settings › Usage):
+  Claude Code hands mods the `five_hour`, `seven_day` and `spend_limit`
+  windows only, so this one is read off the rate-limit headers that come
+  back on the session's own model responses
+  (`anthropic-ratelimit-unified-7d_oi-utilization` and `-reset`, the claim
+  Claude Code itself draws as the Fable row; read from the 2.1.330 build on
+  2026-11-25). The mod sends no request of its own for it and passes every
+  response on untouched. The row appears after the first reply that carries
+  the header, sits beneath the engine's rows, and keeps its last figure
+  when a response comes without one
 - Green above 50% left, yellow above 20% up to 50%, red at 20% or below. A bar turns worse the
   moment it crosses a line, but better only once it is two points back over it,
   so one sitting on 50% does not flicker
@@ -33,8 +52,11 @@ an estimate shown as a range:
 - **Pace:** once five minutes of readings are in hand and the bar has
   dropped, a bar says when it empties if the last hour's rate holds
   (`empty in ~1h 10m at this pace`), or `lasts past reset` when it will not
-  run out first. On SPEND it comes from the last week's billed spend when
-  there is one, and sits on the line beneath
+  run out first. A weekly bar (`7D`, `FB`) paces against the week instead:
+  the share used against the share of the week gone, said once half a day of
+  it has run (`empty in ~2d at this week's pace`), so an hour's burst does
+  not read as an empty week. On SPEND it comes from the last week's billed
+  spend when there is one, and sits on the line beneath
 - **Beneath the bars:** this session's cost in bold (`$0.30 this session`),
   then `as of 14m ago` once 5H/7D figures are ten minutes old
 - **Idle reset:** a window that ended while nothing was sent reads
@@ -383,6 +405,13 @@ Both are pruned when a session starts.
 - **One refresh at a time.** A turn end, a measure, an `/hp` entry and each step's ledger write run one after the other, so a refresh that finds a subscription seat mid-turn clears the ledger before or after a step's write, never in the middle. A refresh that fails hands on to the next. A measure that reports the limits the last refresh already read is skipped, so a turn end adds one pace sample, not two.
 - **A quiet band stops rescanning.** After two quiet minutes the SPEND row re-reads the other sessions' counts; that re-read (several full store scans) now runs at most once per two minutes instead of on every redraw, redraws that arrive while it reads share it, and it is redone at once when the entered figure changes or the month turns. `/hp off` in another session still clears the row on the next redraw.
 - `tests/mutate.py` (new): a clean baseline first, then one mutant per guard above.
+
+## 0.28.0 (2026-11-25)
+
+- **`FB`, the weekly Fable bar.** Plans with no five-hour window report `seven_day` alone to mods, and the Fable weekly limit not at all. The mod now reads it off the unified rate-limit headers of the session's own model responses (an `http.fetch` hook that reads and passes on, and sends nothing itself) and draws it as a row of its own: heart, `FB`, bar. A refused request stays refused, a response with no figure keeps the last one, and a measure that repeats the engine's windows still adds no second pace sample with the Fable row held.
+- **Weekly bars pace against the week.** `7D` and `FB` no longer extrapolate the last hour: they compare the share used with the share of the week gone and say `lasts past reset` or `empty in ~2d at this week's pace`, nothing in the week's first half day. A weekly window with no reset time keeps the hour's pace; `5H` and SPEND are unchanged.
+- **After review.** Only the engine's own windows mark a session as a subscription seat, so a Fable header on some other request can never clear a metered session's spend ledger. A turn that ends past the held Fable reset with no new figure drops the `FB` row; a reply that names no reset keeps the known one, and a reset no date can hold is ignored without losing the share. An engine that comes to report the claim itself (`seven_day_overage_included`) draws one `FB` row, its own.
+- `tests/mutate.py`: seventeen mutants for the above.
 
 ## 0.27.0 (2026-11-23)
 

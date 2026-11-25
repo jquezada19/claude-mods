@@ -188,7 +188,7 @@ write(
 // ── usage-hp ───────────────────────────────────────────────────────────────
 // The desktop row is a heart and a bar the mod draws as SVG, between text the
 // app sets in its monospace face; that text is set here the same way, with the
-// mod's own rules: 5H/7D on a subscription, SPEND alone on a capped seat, the
+// mod's own rules: 5H/7D/FB on a subscription, SPEND alone on a capped seat, the
 // color by what is left (over 50 green, over 20 yellow), a quarter-heart per
 // 25%, a cell per 5%, and the shared footer line beneath.
 type Bar = { label: string; left: number; range?: [number, number]; detail: string }
@@ -232,7 +232,8 @@ write(
   usageRows(
     [
       { label: '5H', left: 62, detail: ' · resets in 2h 14m · lasts past reset' },
-      { label: '7D', left: 34, detail: ' · resets in 4d · empty in ~2d 9h at this pace' },
+      { label: '7D', left: 34, detail: " · resets in 4d · empty in ~1d 13h at this week's pace" },
+      { label: 'FB', left: 58, detail: ' · resets in 4d · lasts past reset' },
     ],
     { lead: '$0.30 this session', dim: '' },
   ),

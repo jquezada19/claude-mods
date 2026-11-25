@@ -1,5 +1,5 @@
 export type UsageHpWindow = {
-  /** Which window: five_hour, seven_day, or a gateway's spend_limit. */
+  /** Which window: five_hour, seven_day, a gateway's spend_limit, or seven_day_fable (read off the response headers). */
   kind: string
   /** How much of the window is used, 0 to 100 (past 100 when exceeded). */
   percentUsed: number
@@ -121,6 +121,8 @@ declare module 'claude-code' {
   interface PluginState {
     'usage-hp': {
       reading: UsageHpReading | null
+      /** The Fable weekly window as the last model response's headers gave it; null before one did. */
+      fable: UsageHpWindow | null
       /** The session's cost at the last reading. */
       counted: number
       /** The session's cost at recent readings, oldest first, two days of them. */

@@ -12,6 +12,7 @@ import type {
   UsageHpSample,
   UsageHpStyle,
   UsageHpSync,
+  UsageHpWindow,
 } from '../types'
 
 const CELLS = 20
@@ -28,6 +29,17 @@ const QUADRANTS = [
 ]
 const TICK = 60_000
 const READING = { plugin: 'usage-hp', key: 'reading' } as const
+// The Fable weekly window. The engine's rateLimits leave it out (they carry
+// five_hour, seven_day and a gateway's spend_limit, checked on 2.1.330), so it
+// is read off the unified rate-limit headers of the engine's own model
+// responses: the claim the engine itself calls `seven_day_overage_included`
+// and draws as "Weekly · Fable".
+const FABLE = { plugin: 'usage-hp', key: 'fable' } as const
+const FABLE_KIND = 'seven_day_fable'
+// The engine's own name for the claim, should a later one report it itself.
+const ENGINE_FABLE_KIND = 'seven_day_overage_included'
+const FABLE_HEADER = 'anthropic-ratelimit-unified-7d_oi'
+const ANTHROPIC_API = /^https:\/\/api\.anthropic\.com\//
 const COUNTED = { plugin: 'usage-hp', key: 'counted' } as const
 const COSTS = { plugin: 'usage-hp', key: 'costs' } as const
 const BASIS = { plugin: 'usage-hp', key: 'basis' } as const
@@ -300,6 +312,33 @@ const LABELS: Record<string, string> = {
   five_hour: '5H',
   seven_day: '7D',
   spend_limit: 'SPEND',
+  [FABLE_KIND]: 'FB',
+  [ENGINE_FABLE_KIND]: 'FB',
+}
+
+/**
+ * The Fable weekly window from a model response's headers, or null where they
+ * carry none. Utilization is a share of 1 and the reset is in epoch seconds;
+ * the percent is rounded to a tenth and capped at 100, as the engine does.
+ */
+export const fableOf = (headers: Record<string, string> | null | undefined): UsageHpWindow | null => {
+  const raw = headers?.[`${FABLE_HEADER}-utilization`]
+  const share = raw === undefined || raw.trim() === '' ? Number.NaN : Number(raw)
+
+  if (!Number.isFinite(share) || share < 0) {
+    return null
+  }
+
+  const reset = Number(headers?.[`${FABLE_HEADER}-reset`])
+
+  return {
+    kind: FABLE_KIND,
+    percentUsed: Math.min(100, Math.round(share * 1000) / 10),
+    // A figure no date can hold is no reset time: the share still stands.
+    ...(Number.isFinite(reset) && reset > 0 && reset * 1000 <= 8.64e15
+      ? { resetsAt: new Date(reset * 1000).toISOString() }
+      : {}),
+  }
 }
 
 const until = (ms: number): string => {
@@ -480,6 +519,30 @@ const paceOf = (
   return resetIn !== null && emptyIn >= resetIn
     ? ' · lasts past reset'
     : ` · empty in ~${until(emptyIn)} at this pace`
+}
+
+// A weekly bar paces against the week itself: an hour's burst says little
+// about seven days. Nothing is said until half a day of the week has run.
+const WEEK = 7 * DAY
+const WEEK_PACE_MIN = DAY / 2
+const isWeekly = (kind: string): boolean => kind.startsWith('seven_day')
+
+/**
+ * A weekly bar's pace: the share used against the share of the week gone.
+ * Used at the week's own rate, it empties before the reset or outlasts it.
+ */
+const weekPaceOf = (percentUsed: number, resetIn: number): string => {
+  const elapsed = WEEK - resetIn
+
+  if (!Number.isFinite(resetIn) || elapsed < WEEK_PACE_MIN || percentUsed <= 0 || percentUsed >= 100) {
+    return ''
+  }
+
+  const emptyIn = ((100 - percentUsed) / percentUsed) * elapsed
+
+  return emptyIn >= resetIn
+    ? ' · lasts past reset'
+    : ` · empty in ~${until(emptyIn)} at this week's pace`
 }
 
 /** A dollar figure for the row: whole dollars as entered, cents when it has them. */
@@ -779,11 +842,33 @@ const refresh = async ($: EngineInterface, cause: Cause, isRead = false): Promis
       ? null
       : priced.usd + Math.max(0, (engineUsd ?? priced.engine) - priced.engine)
   const usd = pricedUsd ?? engineUsd
-  const windows = usage.rateLimits.map(one => ({ ...one }))
+  // The engine's windows first, then the Fable weekly one from the headers,
+  // unless a later engine comes to report it itself.
+  const { value: heldFable = null } = await $.state.get(FABLE)
+  // A turn's replies carry the week's new figure. One that ended past the held
+  // window's reset brought none: the account reports no Fable limit any more.
+  const isFableOver =
+    cause !== 'start' &&
+    heldFable?.resetsAt !== undefined &&
+    Date.parse(heldFable.resetsAt) <= now
+  const fable = isFableOver ? null : heldFable
+
+  if (isFableOver) {
+    await $.state.set(FABLE, null)
+  }
+
+  const windows: UsageHpWindow[] = [
+    ...usage.rateLimits.map(one => ({ ...one })),
+    ...(fable === null || usage.rateLimits.some(one => one.kind === FABLE_KIND || one.kind === ENGINE_FABLE_KIND)
+      ? []
+      : [{ ...fable }]),
+  ]
   const { value: before } = await $.state.get(READING)
   const { value: counted } = await $.state.get(COUNTED)
   const { value: wasSeen = false } = await $.state.get(SEEN)
-  const isSeen = wasSeen || windows.length > 0
+  // Only the engine's own windows say this is a subscription seat: a header
+  // read off some other request must never clear a metered session's ledger.
+  const isSeen = wasSeen || usage.rateLimits.length > 0
   const at = cause === 'start' ? (before?.at ?? null) : now
   const stored = await $.store.get(BUDGET)
   let budget: UsageHpBudget | null = null
@@ -1277,7 +1362,8 @@ export const register: Register = on => {
       // At a turn end the turn's own refresh may already hold these figures: a second
       // read would only add a duplicate pace sample.
       const { value: reading } = await $.state.get(READING)
-      const held = reading?.windows ?? []
+      // The Fable window is the headers', not the engine's: left out of the comparison.
+      const held = (reading?.windows ?? []).filter(one => one.kind !== FABLE_KIND)
       const isHeld =
         held.length === e.rateLimits.length &&
         e.rateLimits.every(w => held.some(r => r.kind === w.kind && Math.floor(r.percentUsed) === Math.floor(w.percentUsed)))
@@ -1288,6 +1374,44 @@ export const register: Register = on => {
     }
 
     return measured
+  }).catch(($, e, next) => next(e))
+
+  // Every model response the engine receives carries the account's unified
+  // rate-limit headers: the Fable weekly window is kept from them, and the next
+  // refresh (a window moving mid-turn, or the turn's end) draws it. The answer
+  // goes on untouched, and nothing here may fail the request: a bad header or a
+  // refused state write leaves the bar as it was.
+  on('http.fetch', async ($, e, next) => {
+    const answer = await next(e)
+
+    // The engine's own requests, wherever they go (a gateway included), and any
+    // other request to Anthropic's API: both answer with the account's headers.
+    if (next.origin.plugin === 'engine' || ANTHROPIC_API.test(e.url)) {
+      try {
+        // A request a hook beneath refused answers `{ deny }`: no headers to read.
+        const window = fableOf(answer.value?.headers)
+
+        if (window !== null) {
+          const { value: held = null } = await $.state.get(FABLE)
+
+          // A reply that names no reset keeps the one already known.
+          const kept = {
+            ...window,
+            ...(window.resetsAt === undefined && held?.resetsAt !== undefined ? { resetsAt: held.resetsAt } : {}),
+          }
+
+          if (held === null || held.percentUsed !== kept.percentUsed || held.resetsAt !== kept.resetsAt) {
+            await $.state.set(FABLE, kept)
+          }
+        }
+      } catch {
+        // The bar keeps what it had.
+      }
+    }
+
+    return answer
+    // Not a gate: should the hook fail, the request's own answer stands (a `next`
+    // already called is replayed, never sent twice).
   }).catch(($, e, next) => next(e))
 
   // Each finished turn moves the figures: read them again.
@@ -1528,7 +1652,9 @@ export const register: Register = on => {
         isReset: false,
         detail:
           (resetIn === null ? '' : ` · resets in ${untilReset(resetIn)}`) +
-          paceOf(samples[one.kind] ?? [], left, now, resetIn),
+          (isWeekly(one.kind) && resetIn !== null
+            ? weekPaceOf(one.percentUsed, resetIn)
+            : paceOf(samples[one.kind] ?? [], left, now, resetIn)),
       }
     })
 
